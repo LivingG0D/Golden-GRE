@@ -1,0 +1,15 @@
+[Unit]
+Description=Golden GRE-over-FOU tunnel (%i)
+Documentation=https://github.com/LivingG0D/Golden-GRE
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/golden-gre/%i.conf
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/golden-gre-up.sh %i
+ExecStop=/usr/local/sbin/golden-gre-down.sh %i
+
+[Install]
+WantedBy=multi-user.target

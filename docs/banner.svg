@@ -1,0 +1,39 @@
+<svg viewBox="0 0 1200 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Golden GRE">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#15130c"/>
+      <stop offset="1" stop-color="#0b0a07"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff3c4"/>
+      <stop offset="0.45" stop-color="#ffd700"/>
+      <stop offset="0.75" stop-color="#d4af37"/>
+      <stop offset="1" stop-color="#b8860b"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="320" rx="22" fill="url(#bg)"/>
+  <rect x="6" y="6" width="1188" height="308" rx="18" fill="none" stroke="url(#gold)" stroke-width="2" opacity="0.55"/>
+
+  <!-- tunnel motif: hub -> two exits -->
+  <g filter="url(#glow)">
+    <line x1="250" y1="232" x2="520" y2="232" stroke="url(#gold)" stroke-width="4" stroke-dasharray="2 10" stroke-linecap="round"/>
+    <line x1="680" y1="232" x2="950" y2="232" stroke="url(#gold)" stroke-width="4" stroke-dasharray="2 10" stroke-linecap="round"/>
+    <circle cx="600" cy="232" r="20" fill="url(#gold)"/>
+    <circle cx="230" cy="232" r="13" fill="none" stroke="url(#gold)" stroke-width="4"/>
+    <circle cx="970" cy="232" r="13" fill="none" stroke="url(#gold)" stroke-width="4"/>
+  </g>
+
+  <text x="600" y="150" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+        font-size="104" font-weight="700" letter-spacing="4" fill="url(#gold)" filter="url(#glow)">GOLDEN&#160;GRE</text>
+
+  <text x="600" y="200" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="23" letter-spacing="3" fill="#e8d9a0">GRE-over-FOU tunnels that punch through proto&#8209;47 filtering</text>
+
+  <text x="600" y="284" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="16" letter-spacing="6" fill="#b8860b">UDP&#160;ENCAP&#160;&#183;&#160;BBR&#160;&#183;&#160;SYSTEMD&#160;&#183;&#160;HUB&#160;&amp;&#160;SPOKE</text>
+</svg>

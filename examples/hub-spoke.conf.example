@@ -1,0 +1,44 @@
+# Golden GRE — hub-and-spoke example.
+# A single hub terminates two tunnels. Each tunnel needs a UNIQUE device,
+# UDP port, and /30. Place each block as its own /etc/golden-gre/<name>.conf.
+#
+# IPs are RFC 5737 documentation placeholders. Replace with real values.
+
+# ======================================================================
+# HUB: /etc/golden-gre/spoke-a.conf
+# ======================================================================
+#   DEV=gre1
+#   LOCAL_PUB=203.0.113.10
+#   REMOTE_PUB=198.51.100.20
+#   TUN_ADDR=10.99.99.1/30        # peer (spoke A) = 10.99.99.2/30
+#   FOU_PORT=5555
+
+# ======================================================================
+# HUB: /etc/golden-gre/spoke-b.conf
+# ======================================================================
+#   DEV=gre2
+#   LOCAL_PUB=203.0.113.10
+#   REMOTE_PUB=192.0.2.30
+#   TUN_ADDR=10.99.99.5/30        # peer (spoke B) = 10.99.99.6/30
+#   FOU_PORT=5556
+
+# ======================================================================
+# SPOKE A: /etc/golden-gre/link.conf   (on 198.51.100.20)
+# ======================================================================
+#   DEV=gre1
+#   LOCAL_PUB=198.51.100.20
+#   REMOTE_PUB=203.0.113.10
+#   TUN_ADDR=10.99.99.2/30
+#   FOU_PORT=5555
+
+# ======================================================================
+# SPOKE B: /etc/golden-gre/link.conf   (on 192.0.2.30)
+# ======================================================================
+#   DEV=gre1
+#   LOCAL_PUB=192.0.2.30
+#   REMOTE_PUB=203.0.113.10
+#   TUN_ADDR=10.99.99.6/30
+#   FOU_PORT=5556
+#
+# Enable on the hub:
+#   systemctl enable --now golden-gre@spoke-a golden-gre@spoke-b
