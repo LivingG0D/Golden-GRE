@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/License-MIT-FFD700?style=for-the-badge&labelColor=1a1a1a" alt="MIT License">
+  <img src="https://img.shields.io/badge/License-Apache_2.0-FFD700?style=for-the-badge&labelColor=1a1a1a" alt="Apache 2.0 License">
   <img src="https://img.shields.io/badge/Bash-Linux-DAA520?style=for-the-badge&logo=gnubash&logoColor=black&labelColor=1a1a1a" alt="Bash">
   <img src="https://img.shields.io/badge/systemd-managed-B8860B?style=for-the-badge&labelColor=1a1a1a" alt="systemd">
   <img src="https://img.shields.io/badge/TCP-BBR-FFC72C?style=for-the-badge&labelColor=1a1a1a" alt="BBR">
@@ -303,6 +303,6 @@ The receiving FOU socket strips the UDP, reinjects the GRE, and the matching `gr
 
 ## 📄 License
 
-[MIT](LICENSE) © [LivingG0D](https://github.com/LivingG0D)
+[Apache 2.0](LICENSE) © [LivingG0D](https://github.com/LivingG0D)
 
 <p align="center"><sub>🥇 <b>Golden GRE</b> — because a tunnel that drops your packets isn't a tunnel.</sub></p>
