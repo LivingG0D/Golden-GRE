@@ -10,6 +10,10 @@
   <img src="https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-D4AF37?style=for-the-badge&logo=ubuntu&logoColor=black&labelColor=1a1a1a" alt="Ubuntu">
 </p>
 
+<p align="center">
+  <a href="https://github.com/LivingG0D/Golden-GRE/actions/workflows/ci.yml"><img src="https://github.com/LivingG0D/Golden-GRE/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
 <h3 align="center">🥇 GRE tunnels that survive networks which drop native GRE — wrapped in UDP, tuned for loss, managed by systemd.</h3>
 
 <p align="center"><i>Build a point-to-point or hub-and-spoke overlay between Linux servers, even across providers/transit that filter IP protocol 47.</i></p>
@@ -136,7 +140,8 @@ sudo systemctl enable --now golden-gre@link
 Test it:
 
 ```bash
-ping 10.99.99.2   # from server 1
+golden-gre-preflight link   # sanity-check modules, sysctl & config
+ping 10.99.99.2             # from server 1
 ```
 
 That's a reboot-persistent, loss-tolerant, forwarding-ready tunnel. 🥇
@@ -258,7 +263,7 @@ Healthy signs: ping at the raw path RTT with ~0% loss, TCP that climbs and holds
 | Device is `UP` but ping 100% loss | Native GRE leaking, or wrong FOU port | Confirm `ip fou show` lists your port; `tcpdump -ni eth0 udp port <FOU_PORT>` should show traffic both ways. |
 | UDP leaves one side, never arrives | Provider blocks that UDP port | Try another `FOU_PORT` (both ends). |
 | TCP crawls, ping is fine | Sender not on BBR | `sysctl net.ipv4.tcp_congestion_control` → should be `bbr`. Re-run `sudo sysctl --system`. |
-| Forwarded TCP connects then stalls | PMTU black hole | MSS clamp present? `iptables -t mangle -S FORWARD | grep mss`. Lower `MTU`. |
+| Forwarded TCP connects then stalls | PMTU black hole | MSS clamp present? `iptables -t mangle -S FORWARD` (look for `mss`). Lower `MTU`. |
 | Gone after reboot | Unit not enabled | `systemctl is-enabled golden-gre@<name>`. |
 | `RTNETLINK: File exists` | Stale device/addr | `systemctl restart golden-gre@<name>` (down/up is idempotent). |
 

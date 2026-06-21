@@ -32,17 +32,20 @@ ip addr add "${TUN_ADDR}" dev "${DEV}"
 ip link set "${DEV}" mtu "${MTU}" up
 
 # TCP MSS clamp on the forward path (both directions) — prevents PMTUD black holes
-for DIR in -o -i; do
-  iptables -t mangle -C FORWARD ${DIR} "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
+for DIR in "-o" "-i"; do
+  iptables -t mangle -C FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
-    || iptables -t mangle -A FORWARD ${DIR} "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
+    || iptables -t mangle -A FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu
 done
 
 # Optional static routes through the tunnel (space-separated CIDRs)
-for net in ${ROUTES:-}; do
-  ip route replace "${net}" dev "${DEV}"
-done
+if [ -n "${ROUTES:-}" ]; then
+  read -ra _routes <<<"${ROUTES}"
+  for net in "${_routes[@]}"; do
+    ip route replace "${net}" dev "${DEV}"
+  done
+fi
 
 # Optional MASQUERADE for traffic exiting via this node
 if [ -n "${NAT_SRC:-}" ]; then

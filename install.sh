@@ -9,6 +9,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 echo "==> installing scripts to /usr/local/sbin"
 install -m 0755 "$SRC/scripts/golden-gre-up.sh"   /usr/local/sbin/golden-gre-up.sh
 install -m 0755 "$SRC/scripts/golden-gre-down.sh" /usr/local/sbin/golden-gre-down.sh
+install -m 0755 "$SRC/scripts/preflight.sh"       /usr/local/sbin/golden-gre-preflight
 
 echo "==> installing systemd template unit"
 install -m 0644 "$SRC/systemd/golden-gre@.service" /etc/systemd/system/golden-gre@.service
@@ -30,7 +31,8 @@ Golden GRE installed. 🥇
 Next:
   1. Create a tunnel config:   /etc/golden-gre/<name>.conf
      (see examples/*.conf.example)
-  2. Start + enable on boot:   systemctl enable --now golden-gre@<name>
-  3. Verify:                   systemctl status golden-gre@<name>
+  2. Preflight (optional):     golden-gre-preflight <name>
+  3. Start + enable on boot:   systemctl enable --now golden-gre@<name>
+  4. Verify:                   systemctl status golden-gre@<name>
 
 NEXT
