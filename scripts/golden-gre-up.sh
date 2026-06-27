@@ -31,6 +31,14 @@ ip link add "${DEV}" type gre \
 ip addr add "${TUN_ADDR}" dev "${DEV}"
 ip link set "${DEV}" mtu "${MTU}" up
 
+# Disable GRO on the underlay NIC. GRO mis-coalesces GRE-in-UDP (FOU) packets on
+# some drivers, corrupting them — they're dropped at the receiver's UDP layer
+# (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
+UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -1)"
+if [ -n "${UL}" ]; then
+  ethtool -K "${UL}" gro off 2>/dev/null || true
+fi
+
 # TCP MSS clamp on the forward path (both directions) — prevents PMTUD black holes
 for DIR in "-o" "-i"; do
   iptables -t mangle -C FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \

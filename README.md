@@ -264,6 +264,7 @@ Healthy signs: ping at the raw path RTT with ~0% loss, TCP that climbs and holds
 | UDP leaves one side, never arrives | Provider blocks that UDP port | Try another `FOU_PORT` (both ends). |
 | TCP crawls, ping is fine | Sender not on BBR | `sysctl net.ipv4.tcp_congestion_control` → should be `bbr`. Re-run `sudo sysctl --system`. |
 | Forwarded TCP connects then stalls | PMTU black hole | MSS clamp present? `iptables -t mangle -S FORWARD` (look for `mss`). Lower `MTU`. |
+| **UDP fast, TCP stuck ~1 Mbit/s** | NIC **GRO** corrupting GRE-in-UDP | `ethtool -K <underlay-iface> gro off` on both ends (automatic in `golden-gre-up.sh`). Watch `UdpInErrors` on the receiver with `nstat`. Full writeup: **[docs/GRO.md](docs/GRO.md)**. |
 | Gone after reboot | Unit not enabled | `systemctl is-enabled golden-gre@<name>`. |
 | `RTNETLINK: File exists` | Stale device/addr | `systemctl restart golden-gre@<name>` (down/up is idempotent). |
 

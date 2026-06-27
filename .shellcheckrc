@@ -1,0 +1,2 @@
+# per-tunnel vars come from a sourced /etc config shellcheck can't follow
+disable=SC1091,SC2154
