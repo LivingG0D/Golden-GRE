@@ -48,6 +48,7 @@ On top of transport it ships the **production glue** a raw `ip tunnel` command l
 - [Performance & tuning](#-performance--tuning)
 - [Verifying with iperf3](#-verifying-with-iperf3)
 - [Troubleshooting](#-troubleshooting)
+- [WireGuard fallback](#-wireguard-fallback)
 - [Security notes](#-security-notes)
 - [How it works under the hood](#-how-it-works-under-the-hood)
 - [License](#-license)
@@ -269,6 +270,14 @@ Healthy signs: ping at the raw path RTT with ~0% loss, TCP that climbs and holds
 | `RTNETLINK: File exists` | Stale device/addr | `systemctl restart golden-gre@<name>` (down/up is idempotent). |
 
 Logs: `journalctl -u golden-gre@<name>`.
+
+---
+
+## 🔁 WireGuard fallback
+
+In some networks, GRE-in-UDP is still detected and throttled hard even when the tunnel is up and ping works.
+
+For those paths, use WireGuard as the transport instead of GRE-over-FOU. The repo now includes a minimal template and notes in `docs/WireGuard.md` plus `examples/wireguard.conf.example`.
 
 ---
 

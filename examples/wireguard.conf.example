@@ -1,0 +1,14 @@
+# WireGuard point-to-point example
+# Copy this to /etc/wireguard/<name>.conf on each host and fill in the placeholders.
+
+[Interface]
+Address = 10.200.200.1/30
+ListenPort = 443
+PrivateKey = REPLACE_WITH_PRIVATE_KEY
+MTU = 1320
+
+[Peer]
+PublicKey = REPLACE_WITH_PEER_PUBLIC_KEY
+AllowedIPs = 10.200.200.2/32
+Endpoint = REPLACE_WITH_PEER_PUBLIC_IP:443
+PersistentKeepalive = 25
