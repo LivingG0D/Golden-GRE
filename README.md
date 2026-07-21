@@ -42,13 +42,17 @@ On top of transport it ships the **production glue** a raw `ip tunnel` command l
 - [How it works](#-how-it-works)
 - [Requirements](#-requirements)
 - [Quick start](#-quick-start)
+- [What gets installed](#-what-gets-installed)
 - [Configuration reference](#-configuration-reference)
+- [Managing tunnels](#-managing-tunnels)
 - [Running multiple tunnels (hub & spoke)](#-running-multiple-tunnels-hub--spoke)
 - [Routing & NAT through the tunnel](#-routing--nat-through-the-tunnel)
 - [Performance & tuning](#-performance--tuning)
 - [Verifying with iperf3](#-verifying-with-iperf3)
 - [Troubleshooting](#-troubleshooting)
 - [WireGuard fallback](#-wireguard-fallback)
+- [Uninstall](#-uninstall)
+- [Development](#-development)
 - [Security notes](#-security-notes)
 - [How it works under the hood](#-how-it-works-under-the-hood)
 - [License](#-license)
@@ -89,6 +93,7 @@ Because the wire payload is UDP, proto-47 filtering never sees a GRE packet to d
 
 - **Linux** with `fou` and `ip_gre` kernel modules (stock on Ubuntu 22.04/24.04, Debian, most distros).
 - `iproute2`, `iptables`, `systemd`.
+- `ethtool` — used to switch GRO off on the underlay NIC at bringup. **Install it.** The call is deliberately non-fatal, so on a host without `ethtool` the step is skipped *silently* and you can land straight in the ~1 Mbit/s TCP collapse described in [docs/GRO.md](docs/GRO.md).
 - Root on both ends.
 - **UDP reachability** between the two public IPs on your chosen port(s). (That's the whole point — UDP gets through where GRE doesn't.)
 - A free **/30** per tunnel for the overlay, and a unique **UDP port** + **device name** per tunnel on any shared host.
@@ -149,6 +154,23 @@ That's a reboot-persistent, loss-tolerant, forwarding-ready tunnel. 🥇
 
 ---
 
+## 📥 What gets installed
+
+`install.sh` must run as root and is **idempotent** — re-run it any time to upgrade in place. It touches exactly these paths and nothing else:
+
+| Path | Mode | What it is |
+|------|:----:|------------|
+| `/usr/local/sbin/golden-gre-up.sh` | `0755` | Brings one tunnel up |
+| `/usr/local/sbin/golden-gre-down.sh` | `0755` | Tears one tunnel down |
+| `/usr/local/sbin/golden-gre-preflight` | `0755` | Readiness checker (installed from `scripts/preflight.sh`) |
+| `/etc/systemd/system/golden-gre@.service` | `0644` | The systemd template unit |
+| `/etc/sysctl.d/99-golden-gre.conf` | `0644` | BBR/`fq`, buffers, forwarding — applied immediately via `sysctl --system` |
+| `/etc/golden-gre/` | `0750` | Directory for your per-tunnel configs (created empty) |
+
+No packages are installed, no existing network configuration is rewritten, and no tunnel starts until you create a config and enable an instance.
+
+---
+
 ## ⚙️ Configuration reference
 
 One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd instance (`golden-gre@<name>`).
@@ -166,6 +188,45 @@ One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd inst
 | `NAT_OUT` | ⬜ | `eth0` | Egress interface for `NAT_SRC`. Defaults to `eth0`. |
 
 > 📝 IPs above use the RFC 5737 documentation ranges. Replace with your real values **in `/etc/golden-gre/` on each host** — never commit them.
+
+---
+
+## 🎛 Managing tunnels
+
+Every tunnel is an independent systemd instance named after its config file (`/etc/golden-gre/link.conf` → `golden-gre@link`):
+
+```bash
+systemctl enable --now golden-gre@link    # start now + on every boot
+systemctl restart golden-gre@link         # full down/up — safe, both are idempotent
+systemctl stop golden-gre@link            # tear down, still enabled at boot
+systemctl disable --now golden-gre@link   # tear down + don't come back
+systemctl status golden-gre@link
+journalctl -u golden-gre@link -n 50
+```
+
+The unit is `Type=oneshot` with `RemainAfterExit=yes`: it runs the up script once and stays `active (exited)` for as long as the tunnel is meant to exist. It also carries `ConditionPathExists=/etc/golden-gre/%i.conf`, so an instance whose config is missing is **skipped rather than failed** — no red units after you delete a config.
+
+### Without systemd
+
+The scripts stand alone, which is handy for testing a config before you enable it:
+
+```bash
+sudo golden-gre-up.sh link
+sudo golden-gre-down.sh link
+```
+
+`up` deletes and recreates the device, so running it twice is fine. `down` ignores anything that's already gone and always exits `0`, so it's safe in teardown scripts.
+
+### Preflight
+
+```bash
+golden-gre-preflight          # host readiness only
+golden-gre-preflight link     # ...plus validate /etc/golden-gre/link.conf
+```
+
+It verifies `fou`/`ip_gre` are loadable and `ip`/`iptables` are present, reports `tcp_congestion_control` and `ip_forward`, and — given an instance name — confirms all five required keys are set. **Hard failures exit `1`; advisories (a non-BBR qdisc, `ip_forward=0`) only warn**, so it drops cleanly into a provisioning pipeline without failing hosts that don't route.
+
+Note what it *can't* do: it never tests the actual path. Reachability on your `FOU_PORT` is the one thing you must confirm yourself — it prints the `tcpdump` command to run on the peer.
 
 ---
 
@@ -277,7 +338,51 @@ Logs: `journalctl -u golden-gre@<name>`.
 
 In some networks, GRE-in-UDP is still detected and throttled hard even when the tunnel is up and ping works.
 
-For those paths, use WireGuard as the transport instead of GRE-over-FOU. The repo now includes a minimal template and notes in `docs/WireGuard.md` plus `examples/wireguard.conf.example`.
+For those paths, use WireGuard as the transport instead of GRE-over-FOU: it's encrypted, UDP-based, has a simpler packet path, and usually measures better on DPI-heavy links. Start from **[docs/WireGuard.md](docs/WireGuard.md)** (suggested MTU `1320`, keepalive `25`) and fill in [`examples/wireguard.conf.example`](examples/wireguard.conf.example).
+
+That doc also covers a failure mode worth reading *before* you need it: **a filtered UDP port makes a WireGuard tunnel fail silently.** The handshake ages out, transfer counters freeze, and `PersistentKeepalive` retries forever without ever logging an error — restarting the interface changes nothing. It walks through confirming it with `tcpdump`, locating an open port with a bidirectional `socat` probe (filtering is frequently *one-directional*, so each direction must be tested separately), and moving the tunnel with `wg set` — including the trap that `wg set` is **runtime-only**, so the change must be written back to the `.conf` or the next reboot returns you to the dead port.
+
+---
+
+## 🧹 Uninstall
+
+```bash
+# 1. stop and disable every tunnel first (this tears down the devices)
+systemctl disable --now 'golden-gre@*'
+
+# 2. remove the installed files
+sudo rm -f /usr/local/sbin/golden-gre-up.sh \
+           /usr/local/sbin/golden-gre-down.sh \
+           /usr/local/sbin/golden-gre-preflight \
+           /etc/systemd/system/golden-gre@.service \
+           /etc/sysctl.d/99-golden-gre.conf
+sudo systemctl daemon-reload
+sudo sysctl --system >/dev/null
+
+# 3. your tunnel configs — only if you're really done
+sudo rm -rf /etc/golden-gre
+```
+
+⚠️ Step 2 reverts `bbr`/`fq`, the enlarged buffers, **and `ip_forward`** to your distro defaults. If anything else on the box (Docker, a VPN, another router role) depends on forwarding, set it explicitly in its own `/etc/sysctl.d/` file before you remove ours.
+
+---
+
+## 🧪 Development
+
+Pure bash, no build step, no runtime dependencies beyond what's in [Requirements](#-requirements). CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every PR:
+
+| Job | What it enforces |
+|-----|------------------|
+| **ShellCheck** | Every script lints clean. `SC1091`/`SC2154` are disabled repo-wide ([`.shellcheckrc`](.shellcheckrc)) because each tunnel's variables arrive from a sourced `/etc` config that ShellCheck can't follow. |
+| **Unit & config sanity** | The systemd unit declares `[Unit]`/`[Service]`/`[Install]` plus `ExecStart`/`ExecStop`; every script starts with `#!/usr/bin/env bash`; and the point-to-point example still defines all five required keys. |
+
+Reproduce the lint locally before pushing:
+
+```bash
+shellcheck scripts/*.sh install.sh
+```
+
+[`.gitattributes`](.gitattributes) pins LF endings on everything that executes on Linux, so contributing from Windows can't ship a CRLF shebang that fails with `bad interpreter`.
 
 ---
 
