@@ -6,6 +6,7 @@
 # Secrets / credentials — never commit.
 .env
 *.key
+*.crt
 *.pem
 *.pub
 id_rsa*

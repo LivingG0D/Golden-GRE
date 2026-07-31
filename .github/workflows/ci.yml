@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
+        uses: ludeeus/action-shellcheck@2.0.0
         env:
           # SC1091/SC2154: per-tunnel vars come from a sourced /etc config we cannot follow.
           SHELLCHECK_OPTS: -e SC1091 -e SC2154
@@ -38,8 +38,11 @@ jobs:
         run: |
           for s in scripts/*.sh install.sh; do
             head -1 "$s" | grep -q '^#!/usr/bin/env bash' || { echo "bad shebang: $s"; exit 1; }
+            # README tells users to run ./install.sh directly, so the committed
+            # mode has to carry +x — a shebang alone does not make it runnable.
+            [ -x "$s" ] || { echo "not executable: $s"; exit 1; }
           done
-          echo "shebangs ok"
+          echo "shebangs + exec bits ok"
       - name: example configs define required keys
         run: |
           for k in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR FOU_PORT; do
