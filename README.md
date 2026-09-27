@@ -37,28 +37,6 @@ On top of transport it ships the **production glue** a raw `ip tunnel` command l
 
 ---
 
-## 📜 Table of Contents
-
-- [How it works](#-how-it-works)
-- [Requirements](#-requirements)
-- [Quick start](#-quick-start)
-- [What gets installed](#-what-gets-installed)
-- [Configuration reference](#-configuration-reference)
-- [Managing tunnels](#-managing-tunnels)
-- [Running multiple tunnels (hub & spoke)](#-running-multiple-tunnels-hub--spoke)
-- [Routing & NAT through the tunnel](#-routing--nat-through-the-tunnel)
-- [Performance & tuning](#-performance--tuning)
-- [Verifying with iperf3](#-verifying-with-iperf3)
-- [Troubleshooting](#-troubleshooting)
-- [WireGuard fallback](#-wireguard-fallback)
-- [Uninstall](#-uninstall)
-- [Development](#-development)
-- [Security notes](#-security-notes)
-- [How it works under the hood](#-how-it-works-under-the-hood)
-- [License](#-license)
-
----
-
 ## 🛠 How it works
 
 ```mermaid
@@ -256,6 +234,8 @@ EOF
 sudo systemctl enable --now golden-gre@spoke-a golden-gre@spoke-b
 ```
 
+Each spoke runs an ordinary point-to-point config pointed back at the hub: its own public IP as `LOCAL_PUB`, the hub as `REMOTE_PUB`, the other host of that /30 (`10.99.99.2/30` for spoke A, `10.99.99.6/30` for spoke B), and the **same `FOU_PORT`** as its hub-side tunnel.
+
 The FOU listeners stack on the hub (`:5555` **and** `:5556`); the kernel demuxes return traffic to the right device by peer IP. Manage them independently — restarting one never touches the other:
 
 ```bash
@@ -375,8 +355,7 @@ Pure bash, no build step, no runtime dependencies beyond what's in [Requirements
 
 | Job | What it enforces |
 |-----|------------------|
-| **ShellCheck** | Every script lints clean. `SC1091`/`SC2154` are disabled repo-wide ([`.shellcheckrc`](.shellcheckrc)) because each tunnel's variables arrive from a sourced `/etc` config that ShellCheck can't follow. |
-| **Unit & config sanity** | The systemd unit declares `[Unit]`/`[Service]`/`[Install]` plus `ExecStart`/`ExecStop`; every script starts with `#!/usr/bin/env bash`; and the point-to-point example still defines all five required keys. |
+| **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point example still defines all five required keys. |
 
 Reproduce the lint locally before pushing:
 

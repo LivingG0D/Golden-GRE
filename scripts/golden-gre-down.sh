@@ -8,10 +8,7 @@ CONF="/etc/golden-gre/${NAME}.conf"
 # shellcheck source=/dev/null
 [ -r "$CONF" ] && . "$CONF"
 
-DEV="${DEV:-}"
-FOU_PORT="${FOU_PORT:-}"
-
-if [ -n "$DEV" ]; then
+if [ -n "${DEV:-}" ]; then
   for DIR in "-o" "-i"; do
     iptables -t mangle -D FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
@@ -23,7 +20,7 @@ if [ -n "$DEV" ]; then
 fi
 
 # Remove this tunnel's FOU listener (each tunnel uses a unique port)
-if [ -n "$FOU_PORT" ]; then
+if [ -n "${FOU_PORT:-}" ]; then
   ip fou del port "${FOU_PORT}" 2>/dev/null || true
 fi
 

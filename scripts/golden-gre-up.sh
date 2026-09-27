@@ -16,10 +16,8 @@ CONF="/etc/golden-gre/${NAME}.conf"
 : "${FOU_PORT:?FOU_PORT not set in $CONF}"
 MTU="${MTU:-1400}"
 
-modprobe fou
-modprobe ip_gre
-
-# FOU decapsulation listener (idempotent)
+# FOU decapsulation listener (idempotent). The kernel autoloads fou here and
+# ip_gre at `ip link add type gre`; preflight checks both are loadable.
 ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} " \
   || ip fou add port "${FOU_PORT}" ipproto 47
 
@@ -34,10 +32,8 @@ ip link set "${DEV}" mtu "${MTU}" up
 # Disable GRO on the underlay NIC. GRO mis-coalesces GRE-in-UDP (FOU) packets on
 # some drivers, corrupting them — they're dropped at the receiver's UDP layer
 # (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
-UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -1)"
-if [ -n "${UL}" ]; then
-  ethtool -K "${UL}" gro off 2>/dev/null || true
-fi
+UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')"
+[ -n "${UL}" ] && ethtool -K "${UL}" gro off 2>/dev/null || true
 
 # TCP MSS clamp on the forward path (both directions) — prevents PMTUD black holes
 for DIR in "-o" "-i"; do

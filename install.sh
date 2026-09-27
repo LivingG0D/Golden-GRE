@@ -19,8 +19,7 @@ install -m 0644 "$SRC/sysctl/99-golden-gre.conf" /etc/sysctl.d/99-golden-gre.con
 sysctl --system >/dev/null
 
 echo "==> preparing /etc/golden-gre"
-mkdir -p /etc/golden-gre
-chmod 0750 /etc/golden-gre
+install -d -m 0750 /etc/golden-gre
 
 systemctl daemon-reload
 
