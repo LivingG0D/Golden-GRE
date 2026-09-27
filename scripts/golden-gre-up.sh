@@ -16,8 +16,15 @@ CONF="/etc/golden-gre/${NAME}.conf"
 : "${FOU_PORT:?FOU_PORT not set in $CONF}"
 MTU="${MTU:-1400}"
 
+# The tunnel cannot pass traffic without an underlay route to the peer, and the
+# GRO fix below needs its NIC. At early boot the route may not exist yet: fail
+# before touching anything and let systemd's Restart=on-failure retry.
+UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
+[ -n "${UL}" ] || { echo "golden-gre: no route to ${REMOTE_PUB} yet" >&2; exit 1; }
+
+# fou has no module alias, so `ip fou add` cannot autoload it. ip_gre does
+# autoload (rtnl-link-gre) at `ip link add type gre`.
 modprobe fou
-modprobe ip_gre
 
 # FOU decapsulation listener (idempotent)
 ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} " \
@@ -27,20 +34,21 @@ ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} " \
 ip link del "${DEV}" 2>/dev/null || true
 ip link add "${DEV}" type gre \
   local "${LOCAL_PUB}" remote "${REMOTE_PUB}" ttl 255 \
-  encap fou encap-sport "${FOU_PORT}" encap-dport "${FOU_PORT}"
+  encap fou encap-sport auto encap-dport "${FOU_PORT}"
 ip addr add "${TUN_ADDR}" dev "${DEV}"
 ip link set "${DEV}" mtu "${MTU}" up
 
 # Disable GRO on the underlay NIC. GRO mis-coalesces GRE-in-UDP (FOU) packets on
 # some drivers, corrupting them — they're dropped at the receiver's UDP layer
 # (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
-UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | grep -oE 'dev [^ ]+' | awk '{print $2}' | head -1)"
-if [ -n "${UL}" ]; then
-  ethtool -K "${UL}" gro off 2>/dev/null || true
-fi
+ethtool -K "${UL}" gro off 2>/dev/null || true
 
+# Accept forwarded traffic in/out of the tunnel. Deleted and re-inserted so it is
+# always at the top, ahead of any DROP that Docker/ufw added since the last run.
 # TCP MSS clamp on the forward path (both directions) — prevents PMTUD black holes
 for DIR in "-o" "-i"; do
+  iptables -D FORWARD "${DIR}" "${DEV}" -j ACCEPT 2>/dev/null || true
+  iptables -I FORWARD "${DIR}" "${DEV}" -j ACCEPT
   iptables -t mangle -C FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
     || iptables -t mangle -A FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
@@ -55,11 +63,12 @@ if [ -n "${ROUTES:-}" ]; then
   done
 fi
 
-# Optional MASQUERADE for traffic exiting via this node
+# Optional MASQUERADE for traffic exiting via this node. Without NAT_OUT, match
+# anything leaving by an interface other than the tunnel (no NIC-name guessing).
 if [ -n "${NAT_SRC:-}" ]; then
-  OUT="${NAT_OUT:-eth0}"
-  iptables -t nat -C POSTROUTING -s "${NAT_SRC}" -o "${OUT}" -j MASQUERADE 2>/dev/null \
-    || iptables -t nat -A POSTROUTING -s "${NAT_SRC}" -o "${OUT}" -j MASQUERADE
+  if [ -n "${NAT_OUT:-}" ]; then OUT=(-o "${NAT_OUT}"); else OUT=(! -o "${DEV}"); fi
+  iptables -t nat -C POSTROUTING -s "${NAT_SRC}" "${OUT[@]}" -j MASQUERADE 2>/dev/null \
+    || iptables -t nat -A POSTROUTING -s "${NAT_SRC}" "${OUT[@]}" -j MASQUERADE
 fi
 
 echo "golden-gre: ${DEV} up — ${TUN_ADDR} -> ${REMOTE_PUB} (fou udp/${FOU_PORT}, mtu ${MTU})"

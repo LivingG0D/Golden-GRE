@@ -1,7 +1,6 @@
 # Real per-host tunnel configs live in /etc/golden-gre on each server — never here.
 *.conf
 !sysctl/*.conf
-!**/*.conf.example
 
 # Secrets / credentials — never commit.
 .env

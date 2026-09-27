@@ -3,6 +3,5 @@
 *.service       text eol=lf
 *.conf          text eol=lf
 *.example       text eol=lf
-install.sh      text eol=lf
 *.md            text
 *.svg           text eol=lf

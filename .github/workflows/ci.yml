@@ -9,34 +9,16 @@ permissions:
   contents: read
 
 jobs:
-  shellcheck:
-    name: ShellCheck
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@2.0.0
-        env:
-          # SC1091/SC2154: per-tunnel vars come from a sourced /etc config we cannot follow.
-          SHELLCHECK_OPTS: -e SC1091 -e SC2154
-
   lint:
-    name: Unit & config sanity
+    name: Lint & sanity
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: systemd unit sanity
-        run: |
-          unit=systemd/golden-gre@.service
-          grep -q '^\[Unit\]'    "$unit"
-          grep -q '^\[Service\]' "$unit"
-          grep -q '^\[Install\]' "$unit"
-          grep -q 'ExecStart='   "$unit"
-          grep -q 'ExecStop='    "$unit"
-          echo "systemd unit ok"
+      - name: ShellCheck
+        run: shellcheck scripts/*.sh tests/*.sh install.sh
       - name: scripts are executable & have bash shebang
         run: |
-          for s in scripts/*.sh install.sh; do
+          for s in scripts/*.sh tests/*.sh install.sh; do
             head -1 "$s" | grep -q '^#!/usr/bin/env bash' || { echo "bad shebang: $s"; exit 1; }
             # README tells users to run ./install.sh directly, so the committed
             # mode has to carry +x — a shebang alone does not make it runnable.
@@ -49,3 +31,13 @@ jobs:
             grep -q "$k" examples/point-to-point.conf.example || { echo "example missing $k"; exit 1; }
           done
           echo "examples ok"
+
+  e2e:
+    name: End-to-end tunnel (network namespaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install.sh
+        run: sudo ./install.sh
+      - name: two namespaces, one tunnel — up, ping, down
+        run: sudo tests/e2e.sh

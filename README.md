@@ -30,32 +30,11 @@ On top of transport it ships the **production glue** a raw `ip tunnel` command l
 
 - 🥇 **Punches through proto-47 filtering** — GRE-in-UDP via FOU.
 - ⚡ **Loss-tolerant by default** — BBR congestion control + `fq`, so a lossy long-haul path doesn't collapse TCP (CUBIC halves its window on every loss; BBR doesn't).
-- 🧱 **Forwarding-ready** — `ip_forward`, FORWARD accept, and **TCP MSS clamping** so forwarded TCP never blackholes on PMTUD.
+- 🧱 **Forwarding-ready** — `ip_forward`, a FORWARD accept inserted ahead of Docker/ufw's DROP policy, and **TCP MSS clamping** so forwarded TCP never blackholes on PMTUD.
+- 🔀 **Many flows, not one** — the FOU source port follows each inner flow's hash, so the tunnel isn't a single UDP 5-tuple stuck in one per-flow policer bucket, ECMP path, or receive queue.
 - 🔁 **Reboot-persistent** — one **systemd template unit** (`golden-gre@<name>`) brings every tunnel back on boot.
 - 🌐 **Hub & spoke** — run many tunnels on one box; each is an isolated instance (own device, UDP port, /30, config).
 - 🧩 **Config-driven** — one small file per tunnel in `/etc/golden-gre/`. No IPs baked into scripts.
-
----
-
-## 📜 Table of Contents
-
-- [How it works](#-how-it-works)
-- [Requirements](#-requirements)
-- [Quick start](#-quick-start)
-- [What gets installed](#-what-gets-installed)
-- [Configuration reference](#-configuration-reference)
-- [Managing tunnels](#-managing-tunnels)
-- [Running multiple tunnels (hub & spoke)](#-running-multiple-tunnels-hub--spoke)
-- [Routing & NAT through the tunnel](#-routing--nat-through-the-tunnel)
-- [Performance & tuning](#-performance--tuning)
-- [Verifying with iperf3](#-verifying-with-iperf3)
-- [Troubleshooting](#-troubleshooting)
-- [WireGuard fallback](#-wireguard-fallback)
-- [Uninstall](#-uninstall)
-- [Development](#-development)
-- [Security notes](#-security-notes)
-- [How it works under the hood](#-how-it-works-under-the-hood)
-- [License](#-license)
 
 ---
 
@@ -164,7 +143,7 @@ That's a reboot-persistent, loss-tolerant, forwarding-ready tunnel. 🥇
 | `/usr/local/sbin/golden-gre-down.sh` | `0755` | Tears one tunnel down |
 | `/usr/local/sbin/golden-gre-preflight` | `0755` | Readiness checker (installed from `scripts/preflight.sh`) |
 | `/etc/systemd/system/golden-gre@.service` | `0644` | The systemd template unit |
-| `/etc/sysctl.d/99-golden-gre.conf` | `0644` | BBR/`fq`, buffers, forwarding — applied immediately via `sysctl --system` |
+| `/etc/sysctl.d/99-golden-gre.conf` | `0644` | BBR/`fq`, buffers, IPv4 forwarding — applied immediately via `sysctl --system` |
 | `/etc/golden-gre/` | `0750` | Directory for your per-tunnel configs (created empty) |
 
 No packages are installed, no existing network configuration is rewritten, and no tunnel starts until you create a config and enable an instance.
@@ -185,7 +164,7 @@ One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd inst
 | `MTU` | ⬜ | `1400` | Tunnel MTU. Default `1400` (safe under a 1500 underlay: 20 IP + 8 UDP + 4 GRE overhead). |
 | `ROUTES` | ⬜ | `"192.0.2.0/24 198.18.0.0/24"` | Space-separated CIDRs to route via this tunnel. |
 | `NAT_SRC` | ⬜ | `10.99.99.0/30` | If set, MASQUERADE this source out `NAT_OUT` (use this node as an internet exit). |
-| `NAT_OUT` | ⬜ | `eth0` | Egress interface for `NAT_SRC`. Defaults to `eth0`. |
+| `NAT_OUT` | ⬜ | `eth0` | Egress interface for `NAT_SRC`. Unset: any interface except the tunnel itself (no guessing at `eth0` vs `ens3`). |
 
 > 📝 IPs above use the RFC 5737 documentation ranges. Replace with your real values **in `/etc/golden-gre/` on each host** — never commit them.
 
@@ -204,7 +183,7 @@ systemctl status golden-gre@link
 journalctl -u golden-gre@link -n 50
 ```
 
-The unit is `Type=oneshot` with `RemainAfterExit=yes`: it runs the up script once and stays `active (exited)` for as long as the tunnel is meant to exist. It also carries `ConditionPathExists=/etc/golden-gre/%i.conf`, so an instance whose config is missing is **skipped rather than failed** — no red units after you delete a config.
+The unit is `Type=oneshot` with `RemainAfterExit=yes`: it runs the up script once and stays `active (exited)` for as long as the tunnel is meant to exist. If there is no route to `REMOTE_PUB` yet (early boot), `up` exits before creating anything and the unit retries every 10 s via `Restart=on-failure` — so GRO is always switched off on the right NIC once the route appears. It also carries `ConditionPathExists=/etc/golden-gre/%i.conf`, so an instance whose config is missing is **skipped rather than failed** — no red units after you delete a config.
 
 ### Without systemd
 
@@ -256,6 +235,8 @@ EOF
 sudo systemctl enable --now golden-gre@spoke-a golden-gre@spoke-b
 ```
 
+Each spoke runs an ordinary point-to-point config pointed back at the hub: its own public IP as `LOCAL_PUB`, the hub as `REMOTE_PUB`, the other host of that /30 (`10.99.99.2/30` for spoke A, `10.99.99.6/30` for spoke B), and the **same `FOU_PORT`** as its hub-side tunnel.
+
 The FOU listeners stack on the hub (`:5555` **and** `:5556`); the kernel demuxes return traffic to the right device by peer IP. Manage them independently — restarting one never touches the other:
 
 ```bash
@@ -278,10 +259,10 @@ ROUTES="10.50.0.0/24"
 ```bash
 # in the exit node's conf
 NAT_SRC="10.99.99.4/30"
-NAT_OUT=eth0
+# NAT_OUT=eth0   # optional; unset masquerades out any interface but the tunnel
 ```
 
-`ROUTES` and `NAT_SRC` are applied on `up` and cleaned on `down`. `ip_forward` and the MSS clamp are already in place, so forwarded TCP keeps a correct MSS and won't stall on a path-MTU black hole.
+`ROUTES` and `NAT_SRC` are applied on `up` and cleaned on `down`. `ip_forward`, the FORWARD accept, and the MSS clamp are already in place, so forwarded TCP keeps a correct MSS and won't stall on a path-MTU black hole.
 
 ---
 
@@ -295,7 +276,7 @@ NAT_OUT=eth0
 | `default_qdisc` | `fq` | BBR's pacing companion. |
 | `tcp_rmem` / `tcp_wmem` max | `128 MiB` | Big enough send/receive windows to fill a high-BDP (high latency × bandwidth) link. |
 | `tcp_mtu_probing` | `1` | Recover gracefully if path MTU is below expectations. |
-| `ip_forward`, `forwarding` | `1` | Route through the tunnel. |
+| `ip_forward` | `1` | Route through the tunnel. IPv4 only on purpose: enabling IPv6 forwarding makes the kernel ignore Router Advertisements, which drops a SLAAC-configured IPv6 default route. |
 
 > 💡 **Real-world impact:** on a path with ~0.5–0.7% loss, switching the *sender* from CUBIC to BBR took a tunnel from **~30 Mbit/s to ~1 Gbit/s**. Loss is a property of the path; BBR just stops over-reacting to it.
 
@@ -342,7 +323,7 @@ For those paths, use WireGuard as the transport instead of GRE-over-FOU: it's en
 
 It also covers two things worth reading *before* you need them. **A filtered UDP port makes a WireGuard tunnel fail silently.** The handshake ages out, transfer counters freeze, and `PersistentKeepalive` retries forever without ever logging an error — restarting the interface changes nothing. It walks through confirming it with `tcpdump`, locating an open port with a bidirectional `socat` probe (filtering is frequently *one-directional*, so each direction must be tested separately), and moving the tunnel with `wg set` — including the trap that `wg set` is **runtime-only**, so the change must be written back to the `.conf` or the next reboot returns you to the dead port.
 
-And **some transit polices UDP per flow, not per host** — one stream measures far below four, and UDP loses 50–65% at any rate. No amount of host tuning moves that ceiling, because a single tunnel is a single UDP 5-tuple in a single bucket. The fix is several tunnels on different ports, bonded at the layer above; the doc covers the config, the measurement that identifies the policer, and the pitfalls (one keypair per tunnel, and ECMP will *not* split a single connection).
+And **some transit polices UDP per flow, not per host** — one stream measures far below four, and UDP loses 50–65% at any rate. No amount of host tuning moves that ceiling, because a single WireGuard tunnel is a single UDP 5-tuple in a single bucket. (Golden GRE already spreads inner flows over many source ports, so it hits this far less — but one TCP connection is still one flow.) The fix is several tunnels on different ports, bonded at the layer above; the doc covers the config, the measurement that identifies the policer, and the pitfalls (one keypair per tunnel, and ECMP will *not* split a single connection).
 
 ---
 
@@ -375,13 +356,14 @@ Pure bash, no build step, no runtime dependencies beyond what's in [Requirements
 
 | Job | What it enforces |
 |-----|------------------|
-| **ShellCheck** | Every script lints clean. `SC1091`/`SC2154` are disabled repo-wide ([`.shellcheckrc`](.shellcheckrc)) because each tunnel's variables arrive from a sourced `/etc` config that ShellCheck can't follow. |
-| **Unit & config sanity** | The systemd unit declares `[Unit]`/`[Service]`/`[Install]` plus `ExecStart`/`ExecStop`; every script starts with `#!/usr/bin/env bash`; and the point-to-point example still defines all five required keys. |
+| **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point example still defines all five required keys. |
+| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). Namespace and config names carry the run's PID, so it never touches existing state. |
 
-Reproduce the lint locally before pushing:
+Reproduce both locally before pushing (the e2e test needs root, `iptables`, and `ethtool`; WSL2 works):
 
 ```bash
-shellcheck scripts/*.sh install.sh
+shellcheck scripts/*.sh tests/*.sh install.sh
+sudo tests/e2e.sh
 ```
 
 [`.gitattributes`](.gitattributes) pins LF endings on everything that executes on Linux, so contributing from Windows can't ship a CRLF shebang that fails with `bad interpreter`.
@@ -392,7 +374,8 @@ shellcheck scripts/*.sh install.sh
 
 - **Golden GRE is unencrypted** — like GRE itself. The overlay protects nothing on the wire. If you need confidentiality, run it **inside** WireGuard/IPsec, or treat the tunnel purely as transport for already-encrypted traffic.
 - **Never commit real configs.** Your per-host IPs live in `/etc/golden-gre/` and are intentionally outside this repo. `.gitignore` guards against accidental secret/`.env` commits.
-- Restrict the FOU UDP port to the peer IP with your firewall if you want to reduce exposure.
+- Restrict the FOU UDP port to the peer IP with your firewall if you want to reduce exposure. Match the **destination** port only — the source port varies per flow.
+- The tunnel device is trusted for forwarding: `up` accepts everything routed in or out of `greN`. Filter inside the overlay if the peer shouldn't reach everything this host can.
 
 ---
 
@@ -414,7 +397,7 @@ shellcheck scripts/*.sh install.sh
                          ▼  looks like plain UDP — proto-47 filters see nothing to drop
 ```
 
-The receiving FOU socket strips the UDP, reinjects the GRE, and the matching `greN` device delivers your inner packet. Overhead is **24 bytes** vs. native GRE's encap-less 4 (hence `MTU=1400`).
+The receiving FOU socket strips the UDP, reinjects the GRE, and the matching `greN` device delivers your inner packet. Overhead is **32 bytes** (20 outer IP + 8 UDP + 4 GRE), so a 1500-byte underlay fits an MTU up to 1468; the default `MTU=1400` leaves headroom for PPPoE, VLANs, and other stacked headers.
 
 ---
 
