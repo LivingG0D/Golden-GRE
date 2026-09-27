@@ -1,0 +1,9 @@
+[Unit]
+Description=Golden GRE liveness check (%i)
+Documentation=https://github.com/LivingG0D/Golden-GRE
+After=golden-gre@%i.service
+ConditionPathExists=/etc/golden-gre/%i.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/golden-gre-check %i

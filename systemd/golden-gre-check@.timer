@@ -1,0 +1,13 @@
+[Unit]
+Description=Golden GRE liveness check every minute (%i)
+# Stops with the tunnel, so a deliberately stopped tunnel never reads as failed.
+PartOf=golden-gre@%i.service
+After=golden-gre@%i.service
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+# Enabling the timer ties it to the tunnel: it starts whenever the tunnel does.
+WantedBy=golden-gre@%i.service

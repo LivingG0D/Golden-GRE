@@ -15,3 +15,5 @@ MTU=1400                    # tunnel MTU (default 1400)
 # ROUTES="10.50.0.0/24"            # CIDRs to route via this tunnel
 # NAT_SRC="10.99.99.0/30"          # MASQUERADE this source (use node as exit)
 # NAT_OUT=eth0                     # egress interface for NAT_SRC (default: any but the tunnel)
+# GRE_KEY=314159                   # same value on both ends; rejects blind injection
+# PEER_ADDR=10.99.99.2             # for golden-gre-check (default: other host of the /30)

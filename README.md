@@ -142,7 +142,9 @@ That's a reboot-persistent, loss-tolerant, forwarding-ready tunnel. 🥇
 | `/usr/local/sbin/golden-gre-up.sh` | `0755` | Brings one tunnel up |
 | `/usr/local/sbin/golden-gre-down.sh` | `0755` | Tears one tunnel down |
 | `/usr/local/sbin/golden-gre-preflight` | `0755` | Readiness checker (installed from `scripts/preflight.sh`) |
+| `/usr/local/sbin/golden-gre-check` | `0755` | Liveness check: pings the peer's overlay address |
 | `/etc/systemd/system/golden-gre@.service` | `0644` | The systemd template unit |
+| `/etc/systemd/system/golden-gre-check@.{service,timer}` | `0644` | Optional per-tunnel health-check timer |
 | `/etc/sysctl.d/99-golden-gre.conf` | `0644` | BBR/`fq`, buffers, IPv4 forwarding — applied immediately via `sysctl --system` |
 | `/etc/golden-gre/` | `0750` | Directory for your per-tunnel configs (created empty) |
 
@@ -161,10 +163,12 @@ One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd inst
 | `REMOTE_PUB` | ✅ | `198.51.100.20` | Peer's public IP. |
 | `TUN_ADDR` | ✅ | `10.99.99.1/30` | This end's overlay address. Peer takes the other host in the /30. |
 | `FOU_PORT` | ✅ | `5555` | UDP port for GRE-in-UDP. **Unique per tunnel** on a shared host. Both ends use the same port. |
-| `MTU` | ⬜ | `1400` | Tunnel MTU. Default `1400` (safe under a 1500 underlay: 20 IP + 8 UDP + 4 GRE overhead). |
+| `MTU` | ⬜ | `1400` | Tunnel MTU. Default `1400` (safe under a 1500 underlay: 20 IP + 8 UDP + 4 GRE overhead, +4 with `GRE_KEY`). |
 | `ROUTES` | ⬜ | `"192.0.2.0/24 198.18.0.0/24"` | Space-separated CIDRs to route via this tunnel. |
 | `NAT_SRC` | ⬜ | `10.99.99.0/30` | If set, MASQUERADE this source out `NAT_OUT` (use this node as an internet exit). |
 | `NAT_OUT` | ⬜ | `eth0` | Egress interface for `NAT_SRC`. Unset: any interface except the tunnel itself (no guessing at `eth0` vs `ens3`). |
+| `GRE_KEY` | ⬜ | `314159` | 32-bit GRE key (number or dotted quad). **Must match on both ends**; packets with any other key are dropped. See [Security notes](#-security-notes). |
+| `PEER_ADDR` | ⬜ | `10.99.99.2` | Peer's overlay address for `golden-gre-check`. Unset: derived as the other host of a /30 or /31 `TUN_ADDR`. |
 
 > 📝 IPs above use the RFC 5737 documentation ranges. Replace with your real values **in `/etc/golden-gre/` on each host** — never commit them.
 
@@ -206,6 +210,19 @@ golden-gre-preflight link     # ...plus validate /etc/golden-gre/link.conf
 It verifies `fou`/`ip_gre` are loadable and `ip`/`iptables` are present, reports `tcp_congestion_control` and `ip_forward`, and — given an instance name — confirms all five required keys are set. **Hard failures exit `1`; advisories (a non-BBR qdisc, `ip_forward=0`) only warn**, so it drops cleanly into a provisioning pipeline without failing hosts that don't route.
 
 Note what it *can't* do: it never tests the actual path. Reachability on your `FOU_PORT` is the one thing you must confirm yourself — it prints the `tcpdump` command to run on the peer.
+
+### Health check
+
+A tunnel unit stays `active (exited)` even when the peer is dead or the path starts filtering your `FOU_PORT` — nothing on either host logs an error. `golden-gre-check` catches that: it pings the peer's overlay address through `greN` and exits `1` when nothing answers.
+
+```bash
+golden-gre-check link                           # one-off
+systemctl enable golden-gre-check@link.timer    # every minute while golden-gre@link runs
+systemctl --failed                              # a dead tunnel shows up here
+journalctl -u golden-gre-check@link             # history of ok / DOWN
+```
+
+The timer is tied to the tunnel: once enabled it starts whenever `golden-gre@link` starts and stops when it stops, so a tunnel you stopped on purpose never reads as failed. It only reports — restarting can't fix a filtered path (see [WireGuard fallback](#-wireguard-fallback) for moving to another port). Point your monitoring at the unit's failed state.
 
 ---
 
@@ -331,13 +348,16 @@ And **some transit polices UDP per flow, not per host** — one stream measures 
 
 ```bash
 # 1. stop and disable every tunnel first (this tears down the devices)
-systemctl disable --now 'golden-gre@*'
+systemctl disable --now 'golden-gre-check@*.timer' 'golden-gre@*'
 
 # 2. remove the installed files
 sudo rm -f /usr/local/sbin/golden-gre-up.sh \
            /usr/local/sbin/golden-gre-down.sh \
            /usr/local/sbin/golden-gre-preflight \
+           /usr/local/sbin/golden-gre-check \
            /etc/systemd/system/golden-gre@.service \
+           /etc/systemd/system/golden-gre-check@.service \
+           /etc/systemd/system/golden-gre-check@.timer \
            /etc/sysctl.d/99-golden-gre.conf
 sudo systemctl daemon-reload
 sudo sysctl --system >/dev/null
@@ -357,7 +377,8 @@ Pure bash, no build step, no runtime dependencies beyond what's in [Requirements
 | Job | What it enforces |
 |-----|------------------|
 | **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point example still defines all five required keys. |
-| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). Namespace and config names carry the run's PID, so it never touches existing state. |
+| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). It also checks `GRE_KEY` is applied and that a mismatched key blocks traffic, that UDP to the FOU port from a non-peer address is dropped, and that `golden-gre-check` passes from both ends of a healthy tunnel and fails on a broken one. Namespace and config names carry the run's PID, so it never touches existing state. |
+| **systemd wiring** | [`tests/systemd.sh`](tests/systemd.sh) on the runner's real systemd: an enabled `golden-gre-check@` timer starts with its tunnel and stops with it, and a failing check leaves the unit `failed`. |
 
 Reproduce both locally before pushing (the e2e test needs root, `iptables`, and `ethtool`; WSL2 works):
 
@@ -365,6 +386,8 @@ Reproduce both locally before pushing (the e2e test needs root, `iptables`, and 
 shellcheck scripts/*.sh tests/*.sh install.sh
 sudo tests/e2e.sh
 ```
+
+`tests/systemd.sh` installs and starts real units, so it is meant for a throwaway machine like the CI runner.
 
 [`.gitattributes`](.gitattributes) pins LF endings on everything that executes on Linux, so contributing from Windows can't ship a CRLF shebang that fails with `bad interpreter`.
 
@@ -374,7 +397,8 @@ sudo tests/e2e.sh
 
 - **Golden GRE is unencrypted** — like GRE itself. The overlay protects nothing on the wire. If you need confidentiality, run it **inside** WireGuard/IPsec, or treat the tunnel purely as transport for already-encrypted traffic.
 - **Never commit real configs.** Your per-host IPs live in `/etc/golden-gre/` and are intentionally outside this repo. `.gitignore` guards against accidental secret/`.env` commits.
-- Restrict the FOU UDP port to the peer IP with your firewall if you want to reduce exposure. Match the **destination** port only — the source port varies per flow.
+- **The FOU port only takes packets from the peer.** `up` inserts two INPUT rules at the top: ACCEPT UDP to `FOU_PORT` from `REMOTE_PUB` (so it works on hosts whose INPUT policy is DROP, like ufw), and DROP it from everyone else. They match the **destination** port only — the source port varies per flow. `down` removes them.
+- **That does not stop spoofing.** A blind attacker who forges `REMOTE_PUB` as the source can still inject GRE packets, and their inner packets reach whatever the tunnel routes to. Set the same `GRE_KEY` on both ends to reject them: without the key the kernel drops the packet. The key travels in cleartext, so it stops blind injection, not an attacker who can see your traffic.
 - The tunnel device is trusted for forwarding: `up` accepts everything routed in or out of `greN`. Filter inside the overlay if the peer shouldn't reach everything this host can.
 
 ---
