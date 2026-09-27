@@ -10,11 +10,13 @@ CONF="/etc/golden-gre/${NAME}.conf"
 
 if [ -n "${DEV:-}" ]; then
   for DIR in "-o" "-i"; do
+    iptables -D FORWARD "${DIR}" "${DEV}" -j ACCEPT 2>/dev/null || true
     iptables -t mangle -D FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
   done
   if [ -n "${NAT_SRC:-}" ]; then
-    iptables -t nat -D POSTROUTING -s "${NAT_SRC}" -o "${NAT_OUT:-eth0}" -j MASQUERADE 2>/dev/null || true
+    if [ -n "${NAT_OUT:-}" ]; then OUT=(-o "${NAT_OUT}"); else OUT=(! -o "${DEV}"); fi
+    iptables -t nat -D POSTROUTING -s "${NAT_SRC}" "${OUT[@]}" -j MASQUERADE 2>/dev/null || true
   fi
   ip link del "${DEV}" 2>/dev/null || true
 fi

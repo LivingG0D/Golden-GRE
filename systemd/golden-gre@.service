@@ -8,6 +8,9 @@ ConditionPathExists=/etc/golden-gre/%i.conf
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Retry if bringup fails, e.g. when the underlay is not ready yet at boot.
+Restart=on-failure
+RestartSec=10
 ExecStart=/usr/local/sbin/golden-gre-up.sh %i
 ExecStop=/usr/local/sbin/golden-gre-down.sh %i
 
