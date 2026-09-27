@@ -16,6 +16,12 @@ CONF="/etc/golden-gre/${NAME}.conf"
 : "${FOU_PORT:?FOU_PORT not set in $CONF}"
 MTU="${MTU:-1400}"
 
+# The tunnel cannot pass traffic without an underlay route to the peer, and the
+# GRO fix below needs its NIC. At early boot the route may not exist yet: fail
+# before touching anything and let systemd's Restart=on-failure retry.
+UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
+[ -n "${UL}" ] || { echo "golden-gre: no route to ${REMOTE_PUB} yet" >&2; exit 1; }
+
 # fou has no module alias, so `ip fou add` cannot autoload it. ip_gre does
 # autoload (rtnl-link-gre) at `ip link add type gre`.
 modprobe fou
@@ -35,16 +41,14 @@ ip link set "${DEV}" mtu "${MTU}" up
 # Disable GRO on the underlay NIC. GRO mis-coalesces GRE-in-UDP (FOU) packets on
 # some drivers, corrupting them — they're dropped at the receiver's UDP layer
 # (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
-# Best-effort: at early boot the route may not exist yet, which must not abort bringup.
-UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
-if [ -n "${UL}" ]; then ethtool -K "${UL}" gro off 2>/dev/null || true; fi
+ethtool -K "${UL}" gro off 2>/dev/null || true
 
-# Accept forwarded traffic in/out of the tunnel. Inserted at the top so a FORWARD
-# policy of DROP (Docker, ufw) does not silently eat routed traffic.
+# Accept forwarded traffic in/out of the tunnel. Deleted and re-inserted so it is
+# always at the top, ahead of any DROP that Docker/ufw added since the last run.
 # TCP MSS clamp on the forward path (both directions) — prevents PMTUD black holes
 for DIR in "-o" "-i"; do
-  iptables -C FORWARD "${DIR}" "${DEV}" -j ACCEPT 2>/dev/null \
-    || iptables -I FORWARD "${DIR}" "${DEV}" -j ACCEPT
+  iptables -D FORWARD "${DIR}" "${DEV}" -j ACCEPT 2>/dev/null || true
+  iptables -I FORWARD "${DIR}" "${DEV}" -j ACCEPT
   iptables -t mangle -C FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \
       -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
     || iptables -t mangle -A FORWARD "${DIR}" "${DEV}" -p tcp --tcp-flags SYN,RST SYN \

@@ -183,7 +183,7 @@ systemctl status golden-gre@link
 journalctl -u golden-gre@link -n 50
 ```
 
-The unit is `Type=oneshot` with `RemainAfterExit=yes`: it runs the up script once and stays `active (exited)` for as long as the tunnel is meant to exist. If bringup fails (say the underlay isn't ready yet at boot) it retries every 10 s via `Restart=on-failure`. It also carries `ConditionPathExists=/etc/golden-gre/%i.conf`, so an instance whose config is missing is **skipped rather than failed** — no red units after you delete a config.
+The unit is `Type=oneshot` with `RemainAfterExit=yes`: it runs the up script once and stays `active (exited)` for as long as the tunnel is meant to exist. If there is no route to `REMOTE_PUB` yet (early boot), `up` exits before creating anything and the unit retries every 10 s via `Restart=on-failure` — so GRO is always switched off on the right NIC once the route appears. It also carries `ConditionPathExists=/etc/golden-gre/%i.conf`, so an instance whose config is missing is **skipped rather than failed** — no red units after you delete a config.
 
 ### Without systemd
 
@@ -357,7 +357,7 @@ Pure bash, no build step, no runtime dependencies beyond what's in [Requirements
 | Job | What it enforces |
 |-----|------------------|
 | **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point example still defines all five required keys. |
-| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also brings a tunnel up with no route to the peer, which must not abort. |
+| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). Namespace and config names carry the run's PID, so it never touches existing state. |
 
 Reproduce both locally before pushing (the e2e test needs root, `iptables`, and `ethtool`; WSL2 works):
 
