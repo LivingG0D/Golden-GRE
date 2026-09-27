@@ -41,3 +41,5 @@ jobs:
         run: sudo ./install.sh
       - name: two namespaces, one tunnel — up, ping, down
         run: sudo tests/e2e.sh
+      - name: systemd wiring — check timer follows the tunnel
+        run: sudo tests/systemd.sh

@@ -10,9 +10,11 @@ echo "==> installing scripts to /usr/local/sbin"
 install -m 0755 "$SRC/scripts/golden-gre-up.sh"   /usr/local/sbin/golden-gre-up.sh
 install -m 0755 "$SRC/scripts/golden-gre-down.sh" /usr/local/sbin/golden-gre-down.sh
 install -m 0755 "$SRC/scripts/preflight.sh"       /usr/local/sbin/golden-gre-preflight
+install -m 0755 "$SRC/scripts/golden-gre-check.sh" /usr/local/sbin/golden-gre-check
 
-echo "==> installing systemd template unit"
-install -m 0644 "$SRC/systemd/golden-gre@.service" /etc/systemd/system/golden-gre@.service
+echo "==> installing systemd template units"
+install -m 0644 "$SRC"/systemd/golden-gre@.service "$SRC"/systemd/golden-gre-check@.service \
+  "$SRC"/systemd/golden-gre-check@.timer /etc/systemd/system/
 
 echo "==> installing sysctl tuning"
 install -m 0644 "$SRC/sysctl/99-golden-gre.conf" /etc/sysctl.d/99-golden-gre.conf
@@ -33,5 +35,6 @@ Next:
   2. Preflight (optional):     golden-gre-preflight <name>
   3. Start + enable on boot:   systemctl enable --now golden-gre@<name>
   4. Verify:                   systemctl status golden-gre@<name>
+  5. Health check (optional):  systemctl enable golden-gre-check@<name>.timer
 
 NEXT

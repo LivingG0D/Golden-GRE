@@ -21,9 +21,14 @@ if [ -n "${DEV:-}" ]; then
   ip link del "${DEV}" 2>/dev/null || true
 fi
 
-# Remove this tunnel's FOU listener (each tunnel uses a unique port)
+# Remove this tunnel's FOU listener (each tunnel uses a unique port) and its
+# INPUT rules
 if [ -n "${FOU_PORT:-}" ]; then
   ip fou del port "${FOU_PORT}" 2>/dev/null || true
+  if [ -n "${REMOTE_PUB:-}" ]; then
+    iptables -D INPUT -p udp --dport "${FOU_PORT}" -s "${REMOTE_PUB}" -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -p udp --dport "${FOU_PORT}" ! -s "${REMOTE_PUB}" -j DROP 2>/dev/null || true
+  fi
 fi
 
 echo "golden-gre: ${NAME} down"

@@ -30,10 +30,23 @@ modprobe fou
 ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} " \
   || ip fou add port "${FOU_PORT}" ipproto 47
 
+# The FOU port takes packets from the peer only. Deleted and re-inserted so both
+# rules sit at the top of INPUT: the ACCEPT opens the port on hosts whose INPUT
+# policy is DROP (ufw); the DROP shuts out every other source.
+for RULE in "-s ${REMOTE_PUB} -j ACCEPT" "! -s ${REMOTE_PUB} -j DROP"; do
+  read -ra r <<<"${RULE}"
+  iptables -D INPUT -p udp --dport "${FOU_PORT}" "${r[@]}" 2>/dev/null || true
+  iptables -I INPUT -p udp --dport "${FOU_PORT}" "${r[@]}"
+done
+
+# Optional GRE key: both ends must match; packets with another key are dropped.
+KEY=()
+[ -z "${GRE_KEY:-}" ] || KEY=(key "${GRE_KEY}")
+
 # (re)create the tunnel device (idempotent)
 ip link del "${DEV}" 2>/dev/null || true
 ip link add "${DEV}" type gre \
-  local "${LOCAL_PUB}" remote "${REMOTE_PUB}" ttl 255 \
+  local "${LOCAL_PUB}" remote "${REMOTE_PUB}" ttl 255 "${KEY[@]}" \
   encap fou encap-sport auto encap-dport "${FOU_PORT}"
 ip addr add "${TUN_ADDR}" dev "${DEV}"
 ip link set "${DEV}" mtu "${MTU}" up
