@@ -37,7 +37,7 @@ ip link set "${DEV}" mtu "${MTU}" up
 # (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
 # Best-effort: at early boot the route may not exist yet, which must not abort bringup.
 UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
-[ -n "${UL}" ] && ethtool -K "${UL}" gro off 2>/dev/null || true
+if [ -n "${UL}" ]; then ethtool -K "${UL}" gro off 2>/dev/null || true; fi
 
 # Accept forwarded traffic in/out of the tunnel. Inserted at the top so a FORWARD
 # policy of DROP (Docker, ufw) does not silently eat routed traffic.
