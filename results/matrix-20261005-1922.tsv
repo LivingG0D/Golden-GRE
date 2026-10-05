@@ -1,0 +1,12 @@
+method	ping	tcp_down	tcp_up	tcp_down_4flows	udp_30M_down	cpu_ir_tcp_down	cpu_tr
+gre	rx 0/20 ok, loss 100%	FAIL (no ping)					busy=5% steal=14%
+ipip	rx 0/20 ok, loss 100%	FAIL (no ping)					busy=10% steal=22%
+gre-fou	rx 5/20 ok, loss 75%	 retr=	 retr=	0.00 bits/sec retr=bits/sec		busy=2% steal=0%	busy=5% steal=17%
+gre-gue	rx 6/20 ok, loss 70%	 retr=	 retr=	0.00 bits/sec retr=bits/sec		busy=3% steal=0%	busy=3% steal=15%
+ipip-fou	rx 6/20 ok, loss 70%	 retr=	 retr=	0.00 bits/sec retr=bits/sec		busy=2% steal=0%	busy=4% steal=17%
+vxlan	rx 6/20 ok, loss 70%	0.00 bits/sec retr=3	0.00 bits/sec retr=4	0.00 bits/sec retr=16	10.7 Kbits/sec jitter ms 0/5 loss (0%)	busy=3% steal=0%	busy=5% steal=18%
+geneve	rx 6/20 ok, loss 70%	0.00 bits/sec retr=4	0.00 bits/sec retr=4	 retr=	10.7 Kbits/sec jitter ms 0/5 loss (0%)	busy=2% steal=0%	busy=3% steal=11%
+wg	rx 0/20 ok, loss 100%	FAIL (no ping)					busy=5% steal=19%
+gre-fou +hop	rx 20/20 ok, loss 0%	26.7 Mbits/sec retr=45	46.5 Mbits/sec retr=10432	27.7 Mbits/sec retr=1757		busy=2% steal=0%	busy=6% steal=33%
+wg-dns	rx 20/20 ok, loss 0%	108 Mbits/sec retr=1105	122 Mbits/sec retr=15682	84.0 Mbits/sec retr=768	29.7 Mbits/sec jitter ms 117/14846 loss (0.79%)	busy=21% steal=1%	busy=38% steal=38%
+wg-icmp	rx 20/20 ok, loss 0%	29.5 Mbits/sec retr=5642	60.3 Mbits/sec retr=4124	36.8 Mbits/sec retr=5092	22.7 Mbits/sec jitter ms 3598/14883 loss (24%)	busy=9% steal=0%	busy=30% steal=31%

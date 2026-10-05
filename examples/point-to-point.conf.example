@@ -3,17 +3,21 @@
 #   systemctl enable --now golden-gre@<name>
 #
 # IPs below are RFC 5737 documentation placeholders. Replace with real values.
+# One KEY=VALUE per line: the shell scripts source this file.
 
 DEV=gre1                    # tunnel device name (unique per host)
-LOCAL_PUB=203.0.113.10      # THIS server's public IP
-REMOTE_PUB=198.51.100.20    # peer's public IP
+LOCAL_PUB=203.0.113.10      # THIS server's public IPv4 address (the relay binds it)
+REMOTE_PUB=198.51.100.20    # peer's public IPv4 address
 TUN_ADDR=10.99.99.1/30      # this end's overlay IP (peer = 10.99.99.2/30)
-FOU_PORT=5555               # UDP port for GRE-in-UDP (same on both ends)
-MTU=1400                    # tunnel MTU (default 1400)
 
-# --- optional ---
+# --- optional (defaults shown) ---
+# FACADE=dns                       # what the relay makes the wire traffic look like: dns (UDP/53) or icmp
+# DNS_PORT=53                      # dns facade: UDP port on both ends
+# MTU=1380                         # tunnel MTU
+# GRE_KEY=41                       # same on both ends; several tunnels on one host need different keys
+# RELAY_PORT=5601                  # loopback UDP port between the tunnel and the relay (unique per tunnel)
+# FOU_PORT=5599                    # loopback FOU listener port (unique per tunnel)
 # ROUTES="10.50.0.0/24"            # CIDRs to route via this tunnel
 # NAT_SRC="10.99.99.0/30"          # MASQUERADE this source (use node as exit)
 # NAT_OUT=eth0                     # egress interface for NAT_SRC (default: any but the tunnel)
-# GRE_KEY=314159                   # same value on both ends; rejects blind injection
 # PEER_ADDR=10.99.99.2             # for golden-gre-check (default: other host of the /30)

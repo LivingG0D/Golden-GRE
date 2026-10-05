@@ -1,27 +1,32 @@
 #!/usr/bin/env bash
 # systemd wiring test for a real host with systemd as PID 1 (the CI runner).
 # install.sh must already have run. Starts a throwaway tunnel toward an
-# unreachable documentation address and checks that the check timer follows the
-# tunnel's lifecycle, that a failing check leaves its unit failed, and that
-# stopping the tunnel cancels an in-flight check without marking it failed.
+# unreachable documentation address and checks that the unit runs the relay as
+# its main process and builds and removes the device around it, that the check
+# timer follows the tunnel's lifecycle, that a failing check leaves its unit
+# failed, and that stopping the tunnel cancels an in-flight check without
+# marking it failed.
 set -euo pipefail
 
 fail(){ echo "FAIL: $*" >&2; exit 1; }
 ok(){ echo "ok: $*"; }
 
-# Instance, device and port are per run; refuse to start on any collision rather
+# Instance, device and ports are per run; refuse to start on any collision rather
 # than reuse (and later tear down) state this test does not own.
 N="unit-$$" DEV="ggu$$" PORT=$(( 20000 + $$ % 20000 ))
+DNS_PORT=$PORT FOU_PORT=$(( PORT + 1 )) RELAY_PORT=$(( PORT + 2 )) KEY=$(( 1000 + $$ % 60000 ))
 [ -e "/etc/golden-gre/$N.conf" ] && fail "/etc/golden-gre/$N.conf already exists"
 ip link show "$DEV" >/dev/null 2>&1 && fail "device $DEV already exists"
-if ip fou show | grep -q "port ${PORT} " || [ -n "$(ss -Hlun "sport = :${PORT}")" ]; then
-  fail "UDP port $PORT already in use"
-fi
+for p in "$DNS_PORT" "$FOU_PORT" "$RELAY_PORT"; do
+  if ip fou show | grep -q "port ${p} " || [ -n "$(ss -Hlun "sport = :${p}")" ]; then
+    fail "UDP port $p already in use"
+  fi
+done
 
 cleanup() {
   systemctl disable --now "golden-gre-check@$N.timer" 2>/dev/null || true
   systemctl stop "golden-gre@$N" 2>/dev/null || true
-  systemctl reset-failed "golden-gre-check@$N.service" 2>/dev/null || true
+  systemctl reset-failed "golden-gre-check@$N.service" "golden-gre@$N.service" 2>/dev/null || true
   rm -f "/etc/golden-gre/$N.conf"
 }
 trap cleanup EXIT
@@ -32,11 +37,18 @@ DEV=$DEV
 LOCAL_PUB=$src
 REMOTE_PUB=192.0.2.1
 TUN_ADDR=10.250.250.1/30
-FOU_PORT=$PORT
+GRE_KEY=$KEY
+DNS_PORT=$DNS_PORT
+FOU_PORT=$FOU_PORT
+RELAY_PORT=$RELAY_PORT
 EOF
 
 systemctl enable "golden-gre-check@$N.timer"
 systemctl start "golden-gre@$N"
+systemctl is-active -q "golden-gre@$N" || fail "tunnel unit is not active after start"
+ip link show "$DEV" >/dev/null 2>&1 || fail "unit started but the tunnel device does not exist"
+[ -n "$(ss -Hlun "sport = :${DNS_PORT}")" ] || fail "the relay is not listening on UDP $DNS_PORT"
+ok "unit runs the relay as its main process and builds the device"
 systemctl is-active -q "golden-gre-check@$N.timer" || fail "timer did not start with the tunnel"
 ok "enabled timer starts with the tunnel"
 
@@ -60,5 +72,9 @@ ok "stopping the tunnel cancels an in-flight check cleanly"
 
 systemctl is-active -q "golden-gre-check@$N.timer" && fail "timer still running after the tunnel stopped"
 ok "timer stops with the tunnel"
+
+ip link show "$DEV" >/dev/null 2>&1 && fail "stopping the unit left the tunnel device behind"
+[ -z "$(ss -Hlun "sport = :${DNS_PORT}")" ] || fail "the relay still holds UDP $DNS_PORT after the unit stopped"
+ok "stopping the unit removes the device and ends the relay"
 
 echo "systemd: PASS"

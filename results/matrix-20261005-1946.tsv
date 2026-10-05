@@ -1,0 +1,5 @@
+method	ping	tcp_down	tcp_up	tcp_down_4flows	udp_30M_down	cpu_ir_tcp_down	cpu_tr
+wg-dns-c	rx 20/20 ok, loss 0%	129 Mbits/sec retr=4537	108 Mbits/sec retr=12706	141 Mbits/sec retr=2700	29.8 Mbits/sec jitter ms 107/13994 loss (0.76%)	busy=17% steal=1%	busy=35% steal=32%
+wg-icmp-c	rx 20/20 ok, loss 0%	27.3 Mbits/sec retr=8704	111 Mbits/sec retr=5473	84.4 Mbits/sec retr=4308	30.1 Mbits/sec jitter ms 5/14058 loss (0.036%)	busy=4% steal=0%	busy=10% steal=14%
+gre-dns-c	rx 20/20 ok, loss 0%	138 Mbits/sec retr=7400	153 Mbits/sec retr=16895	161 Mbits/sec retr=6323	30.0 Mbits/sec jitter ms 2/13997 loss (0.014%)	busy=13% steal=0%	busy=25% steal=44%
+gre-icmp-c	rx 20/20 ok, loss 0%	101 Mbits/sec retr=19251	115 Mbits/sec retr=6774	89.9 Mbits/sec retr=4752	30.0 Mbits/sec jitter ms 0/13994 loss (0%)	busy=10% steal=0%	busy=21% steal=33%

@@ -15,7 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: ShellCheck
-        run: shellcheck scripts/*.sh tests/*.sh install.sh
+        run: shellcheck -x scripts/*.sh tests/*.sh install.sh bench/*.sh bench/remote/*.sh tools/*.sh
+      - name: Python compiles
+        run: python3 -m py_compile bench/remote/*.py
+      - name: relay builds without warnings
+        run: gcc -O2 -Wall -Wextra -Werror -o /tmp/golden-gre-relay relay/golden-gre-relay.c
       - name: scripts are executable & have bash shebang
         run: |
           for s in scripts/*.sh tests/*.sh install.sh; do
@@ -25,16 +29,14 @@ jobs:
             [ -x "$s" ] || { echo "not executable: $s"; exit 1; }
           done
           echo "shebangs + exec bits ok"
-      - name: example configs define required keys
+      - name: example config defines required keys, and no real address
         run: |
-          for k in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR FOU_PORT; do
-            grep -q "$k" examples/point-to-point.conf.example || { echo "example missing $k"; exit 1; }
-          done
-          # IPv6 underlay is plain GRE: the four keys, and no FOU_PORT to set
           for k in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR; do
-            grep -q "^$k=" examples/point-to-point-ipv6.conf.example || { echo "IPv6 example missing $k"; exit 1; }
+            grep -q "^$k=" examples/point-to-point.conf.example || { echo "example missing $k"; exit 1; }
           done
-          ! grep -q '^FOU_PORT=' examples/point-to-point-ipv6.conf.example || { echo "IPv6 example must not set FOU_PORT"; exit 1; }
+          # the example must stay on RFC 5737 documentation addresses
+          grep -E '^(LOCAL_PUB|REMOTE_PUB)=' examples/point-to-point.conf.example | grep -vqE '=(192\.0\.2|198\.51\.100|203\.0\.113)\.' \
+            && { echo "example uses a non-documentation address"; exit 1; }
           echo "examples ok"
 
   e2e:
@@ -44,7 +46,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: install.sh
         run: sudo ./install.sh
-      - name: two namespaces, one tunnel — up, ping, down
+      - name: relay on loopback, both disguises
+        run: sudo tests/relay.sh
+      - name: two namespaces, real tunnels — up, data, second tunnel, failure paths, down
         run: sudo tests/e2e.sh
-      - name: systemd wiring — check timer follows the tunnel
+      - name: systemd wiring — relay is the main process, check timer follows the tunnel
         run: sudo tests/systemd.sh

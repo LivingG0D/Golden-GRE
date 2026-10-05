@@ -1,18 +1,19 @@
 [Unit]
-Description=Golden GRE-over-FOU tunnel (%i)
+Description=Golden GRE tunnel (%i): GRE over IPv4 through the relay
 Documentation=https://github.com/LivingG0D/Golden-GRE
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=/etc/golden-gre/%i.conf
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-# Retry if bringup fails, e.g. when the underlay is not ready yet at boot.
-Restart=on-failure
-RestartSec=10
-ExecStart=/usr/local/sbin/golden-gre-up.sh %i
-ExecStop=/usr/local/sbin/golden-gre-down.sh %i
+# The relay is the main process; the device and firewall state are built around it.
+Type=simple
+# Retry if bringup fails (e.g. the underlay is not ready yet at boot) or the relay dies.
+Restart=always
+RestartSec=5
+ExecStartPre=/usr/local/sbin/golden-gre-up.sh %i
+ExecStart=/usr/local/sbin/golden-gre-relay.sh %i
+ExecStopPost=/usr/local/sbin/golden-gre-down.sh %i
 
 [Install]
 WantedBy=multi-user.target
