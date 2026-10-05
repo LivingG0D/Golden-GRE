@@ -32,8 +32,8 @@
         font-size="104" font-weight="700" letter-spacing="4" fill="url(#gold)" filter="url(#glow)">GOLDEN&#160;GRE</text>
 
   <text x="600" y="200" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif"
-        font-size="23" letter-spacing="3" fill="#e8d9a0">GRE-over-FOU tunnels that punch through proto&#8209;47 filtering</text>
+        font-size="23" letter-spacing="3" fill="#e8d9a0">GRE tunnels for IPv4 paths that cut tunnels</text>
 
   <text x="600" y="284" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif"
-        font-size="16" letter-spacing="6" fill="#b8860b">UDP&#160;ENCAP&#160;&#183;&#160;BBR&#160;&#183;&#160;SYSTEMD&#160;&#183;&#160;HUB&#160;&amp;&#160;SPOKE</text>
+        font-size="16" letter-spacing="6" fill="#b8860b">DNS&#160;RELAY&#160;&#183;&#160;BBR&#160;&#183;&#160;SYSTEMD&#160;&#183;&#160;MULTI&#160;TUNNEL</text>
 </svg>

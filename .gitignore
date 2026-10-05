@@ -17,3 +17,7 @@ known_hosts
 *~
 .DS_Store
 Thumbs.db
+
+# Benchmark: the two servers' real addresses and raw logs never go in the repository.
+bench/hosts.env
+results/raw/

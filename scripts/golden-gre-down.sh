@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Golden GRE — tear down one GRE-over-FOU tunnel.
+# Golden GRE — tear down one tunnel: device, loopback FOU listener and firewall state.
+# It does not stop the relay (systemd stops it as the unit's main process).
 # Usage: golden-gre-down.sh <instance>
 set -uo pipefail
 
@@ -21,14 +22,16 @@ if [ -n "${DEV:-}" ]; then
   ip link del "${DEV}" 2>/dev/null || true
 fi
 
-# Remove this tunnel's FOU listener (each tunnel uses a unique port) and its
-# INPUT rules
-if [ -n "${FOU_PORT:-}" ]; then
-  ip fou del port "${FOU_PORT}" 2>/dev/null || true
-  if [ -n "${REMOTE_PUB:-}" ]; then
-    iptables -D INPUT -p udp --dport "${FOU_PORT}" -s "${REMOTE_PUB}" -j ACCEPT 2>/dev/null || true
-    iptables -D INPUT -p udp --dport "${FOU_PORT}" ! -s "${REMOTE_PUB}" -j DROP 2>/dev/null || true
+# The loopback FOU listener (each tunnel on a host uses its own port) and this tunnel's INPUT accept.
+FOU_PORT="${FOU_PORT:-5599}"
+ip fou del port "${FOU_PORT}" local 127.0.0.1 2>/dev/null || ip fou del port "${FOU_PORT}" 2>/dev/null || true
+if [ -n "${REMOTE_PUB:-}" ]; then
+  if [ "${FACADE:-dns}" = dns ]; then
+    WIRE=(-p udp --dport "${DNS_PORT:-53}")
+  else
+    WIRE=(-p icmp)
   fi
+  iptables -D INPUT "${WIRE[@]}" -s "${REMOTE_PUB}" -m comment --comment "golden-gre:${NAME}" -j ACCEPT 2>/dev/null || true
 fi
 
 echo "golden-gre: ${NAME} down"

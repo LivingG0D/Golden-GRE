@@ -17,6 +17,9 @@ echo "== tools =="
 for t in ip iptables; do
   if command -v "$t" >/dev/null 2>&1; then g "$t present"; else b "$t missing"; fi
 done
+if command -v ethtool >/dev/null 2>&1; then g "ethtool present"; else w "ethtool missing (turns off GSO on the tunnel device; install it)"; fi
+RELAY="${GOLDEN_GRE_RELAY:-/usr/local/sbin/golden-gre-relay}"
+if [ -x "$RELAY" ]; then g "relay binary $RELAY"; else b "relay binary $RELAY missing (run install.sh; it needs gcc)"; fi
 
 echo "== sysctl =="
 cc="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '?')"
@@ -31,12 +34,27 @@ if [ -n "$NAME" ]; then
   if [ -r "$CONF" ]; then
     # shellcheck source=/dev/null
     . "$CONF"
-    for v in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR FOU_PORT; do
+    for v in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR; do
       if [ -n "${!v:-}" ]; then g "$v=${!v}"; else b "$v not set"; fi
     done
-    if [ -n "${FOU_PORT:-}" ]; then
-      w "verify the path end-to-end with: tcpdump -ni any udp port ${FOU_PORT}  (run on the peer while this side sends)"
+    case "${LOCAL_PUB:-}${REMOTE_PUB:-}" in *:*) b "LOCAL_PUB and REMOTE_PUB must be IPv4 addresses" ;; esac
+    if [ -n "${LOCAL_PUB:-}" ]; then
+      if ip -4 -o addr show | grep -qw "${LOCAL_PUB}"; then g "${LOCAL_PUB} is configured on this host"; else b "${LOCAL_PUB} is not an address of this host (the relay binds it)"; fi
     fi
+    FACADE="${FACADE:-dns}"
+    case "$FACADE" in
+      dns)
+        port="${DNS_PORT:-53}"
+        if [ -n "$(ss -Hlun "sport = :${port}" "src ${LOCAL_PUB:-0.0.0.0}" 2>/dev/null)" ]; then
+          b "UDP ${LOCAL_PUB:-*}:${port} is already in use (another relay or a DNS server); use a different LOCAL_PUB or DNS_PORT"
+        else
+          g "UDP ${LOCAL_PUB:-*}:${port} is free for the relay"
+        fi
+        w "verify the path end-to-end with: tcpdump -ni any udp port ${port}  (run on the peer while this side sends)"
+        ;;
+      icmp) w "verify the path end-to-end with: tcpdump -ni any icmp  (run on the peer while this side sends)" ;;
+      *) b "FACADE must be dns or icmp" ;;
+    esac
   else
     b "config not found — create it from examples/"
   fi

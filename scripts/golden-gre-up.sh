@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Golden GRE — bring up one GRE-over-FOU tunnel from /etc/golden-gre/<instance>.conf
+# Golden GRE — bring up one tunnel from /etc/golden-gre/<instance>.conf.
+#
+# The tunnel is GRE-in-FOU on loopback. golden-gre-relay (started by golden-gre-relay.sh, or by the
+# systemd unit) carries its packets between the two servers inside a DNS-shaped UDP/53 disguise (or
+# ICMP), because a filtered IPv4 path cuts every ordinary tunnel flow after a few packets. This script
+# builds the device and the firewall state; it does not run the relay.
 # Usage: golden-gre-up.sh <instance>
 set -euo pipefail
 
@@ -13,48 +18,84 @@ CONF="/etc/golden-gre/${NAME}.conf"
 : "${LOCAL_PUB:?LOCAL_PUB not set in $CONF}"
 : "${REMOTE_PUB:?REMOTE_PUB not set in $CONF}"
 : "${TUN_ADDR:?TUN_ADDR not set in $CONF}"
-: "${FOU_PORT:?FOU_PORT not set in $CONF}"
-MTU="${MTU:-1400}"
+MTU="${MTU:-1380}"
+FACADE="${FACADE:-dns}"
+DNS_PORT="${DNS_PORT:-53}"
+RELAY_PORT="${RELAY_PORT:-5601}"
+FOU_PORT="${FOU_PORT:-5599}"
+GRE_KEY="${GRE_KEY:-41}"
 
-# The tunnel cannot pass traffic without an underlay route to the peer, and the
-# GRO fix below needs its NIC. At early boot the route may not exist yet: fail
-# before touching anything and let systemd's Restart=on-failure retry.
-UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
-[ -n "${UL}" ] || { echo "golden-gre: no route to ${REMOTE_PUB} yet" >&2; exit 1; }
+case "${LOCAL_PUB}${REMOTE_PUB}" in
+  *:*) echo "golden-gre: LOCAL_PUB and REMOTE_PUB must be IPv4 addresses ($CONF)" >&2; exit 1 ;;
+esac
+case "${FACADE}" in
+  dns | icmp) ;;
+  *) echo "golden-gre: FACADE must be dns or icmp ($CONF)" >&2; exit 1 ;;
+esac
+
+# The relay binds LOCAL_PUB and needs a route to the peer. At early boot either may be missing:
+# fail before touching anything and let systemd's Restart= retry.
+ip -4 -o addr show 2>/dev/null | grep -qw "${LOCAL_PUB}" \
+  || { echo "golden-gre: ${LOCAL_PUB} is not configured on this host yet" >&2; exit 1; }
+ip route get "${REMOTE_PUB}" >/dev/null 2>&1 \
+  || { echo "golden-gre: no route to ${REMOTE_PUB} yet" >&2; exit 1; }
+
+# A listener that already exists on a fresh bringup (no device yet) belongs to another tunnel on this
+# host: sharing it would let this tunnel's rollback or teardown remove the other one's listener. A
+# stale one from a crashed run is removed by the unit's ExecStopPost; by hand, run golden-gre-down.sh.
+if ! ip link show "${DEV}" >/dev/null 2>&1 && ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} "; then
+  echo "golden-gre: FOU port ${FOU_PORT} is already in use; give each tunnel on this host its own FOU_PORT ($CONF)" >&2
+  exit 1
+fi
+
+# On a fresh bringup, roll back on any failure: systemd never runs ExecStop for a
+# start that failed, so a half-built tunnel (listener, rules, device) would stay
+# behind. Only when the device does not exist yet: a failing re-run by hand on a
+# live tunnel must not tear it down while systemd still reports it active.
+rollback() {
+  local rc=$?
+  [ "$rc" -eq 0 ] && return
+  echo "golden-gre: ${NAME} bringup failed (exit ${rc}), rolling back" >&2
+  "$(dirname "$0")/golden-gre-down.sh" "${NAME}" >/dev/null 2>&1
+}
+if ! ip link show "${DEV}" >/dev/null 2>&1; then
+  trap rollback EXIT
+  # A stop during bringup (SIGTERM from systemd) must roll back too, but the EXIT
+  # trap would see $? of the last finished command, usually 0. Exit non-zero.
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+fi
 
 # fou has no module alias, so `ip fou add` cannot autoload it. ip_gre does
 # autoload (rtnl-link-gre) at `ip link add type gre`.
 modprobe fou
 
-# FOU decapsulation listener (idempotent)
+# FOU decapsulation listener, loopback only: the relay hands the peer's packets to it (idempotent)
 ip fou show 2>/dev/null | grep -q "port ${FOU_PORT} " \
-  || ip fou add port "${FOU_PORT}" ipproto 47
+  || ip fou add port "${FOU_PORT}" ipproto 47 local 127.0.0.1
 
-# The FOU port takes packets from the peer only. Deleted and re-inserted so both
-# rules sit at the top of INPUT: the ACCEPT opens the port on hosts whose INPUT
-# policy is DROP (ufw); the DROP shuts out every other source.
-for RULE in "-s ${REMOTE_PUB} -j ACCEPT" "! -s ${REMOTE_PUB} -j DROP"; do
-  read -ra r <<<"${RULE}"
-  iptables -D INPUT -p udp --dport "${FOU_PORT}" "${r[@]}" 2>/dev/null || true
-  iptables -I INPUT -p udp --dport "${FOU_PORT}" "${r[@]}"
-done
+# The relay's wire traffic takes packets from the peer only. Deleted and re-inserted so the rule sits
+# at the top of INPUT and opens the port on hosts whose INPUT policy is DROP (ufw). No DROP rule for
+# other sources: a local resolver may share the DNS port. The rule carries the instance name, so
+# tunnels sharing a peer each own (and later remove) their own.
+if [ "${FACADE}" = dns ]; then
+  WIRE=(-p udp --dport "${DNS_PORT}")
+else
+  WIRE=(-p icmp)
+fi
+iptables -D INPUT "${WIRE[@]}" -s "${REMOTE_PUB}" -m comment --comment "golden-gre:${NAME}" -j ACCEPT 2>/dev/null || true
+iptables -I INPUT "${WIRE[@]}" -s "${REMOTE_PUB}" -m comment --comment "golden-gre:${NAME}" -j ACCEPT
 
-# Optional GRE key: both ends must match; packets with another key are dropped.
-KEY=()
-[ -z "${GRE_KEY:-}" ] || KEY=(key "${GRE_KEY}")
-
-# (re)create the tunnel device (idempotent)
+# (re)create the tunnel device (idempotent). Both ends must use the same GRE_KEY; tunnels on one host
+# need different keys, FOU_PORT, RELAY_PORT and LOCAL_PUB.
 ip link del "${DEV}" 2>/dev/null || true
-ip link add "${DEV}" type gre \
-  local "${LOCAL_PUB}" remote "${REMOTE_PUB}" ttl 255 "${KEY[@]}" \
-  encap fou encap-sport auto encap-dport "${FOU_PORT}"
+ip link add "${DEV}" type gre local 127.0.0.1 remote 127.0.0.1 ttl 255 key "${GRE_KEY}" \
+  encap fou encap-sport "${FOU_PORT}" encap-dport "${RELAY_PORT}"
 ip addr add "${TUN_ADDR}" dev "${DEV}"
 ip link set "${DEV}" mtu "${MTU}" up
 
-# Disable GRO on the underlay NIC. GRO mis-coalesces GRE-in-UDP (FOU) packets on
-# some drivers, corrupting them — they're dropped at the receiver's UDP layer
-# (UdpInErrors), which collapses TCP to ~1 Mbit while UDP looks fine. See docs/GRO.md.
-ethtool -K "${UL}" gro off 2>/dev/null || true
+# One packet per datagram. With GSO the kernel would hand the relay datagrams of up to 64 KB, and the
+# loopback path does not segment them.
+ethtool -K "${DEV}" tso off gso off gro off >/dev/null 2>&1 || true
 
 # Accept forwarded traffic in/out of the tunnel. Deleted and re-inserted so it is
 # always at the top, ahead of any DROP that Docker/ufw added since the last run.
@@ -84,4 +125,4 @@ if [ -n "${NAT_SRC:-}" ]; then
     || iptables -t nat -A POSTROUTING -s "${NAT_SRC}" "${OUT[@]}" -j MASQUERADE
 fi
 
-echo "golden-gre: ${DEV} up — ${TUN_ADDR} -> ${REMOTE_PUB} (fou udp/${FOU_PORT}, mtu ${MTU})"
+echo "golden-gre: ${DEV} up — ${TUN_ADDR} -> ${REMOTE_PUB} (relay ${FACADE}, mtu ${MTU}); run the relay: golden-gre-relay.sh ${NAME}"

@@ -6,3 +6,5 @@
 *.example       text eol=lf
 *.md            text
 *.svg           text eol=lf
+*.c            text eol=lf
+*.py           text eol=lf

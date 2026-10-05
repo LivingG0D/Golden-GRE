@@ -1,15 +1,43 @@
-# WireGuard Fallback
+# WireGuard
 
-Golden GRE is built around GRE-in-UDP. In some filtered networks, that still gets throttled hard.
-
-WireGuard is the practical fallback:
+Golden GRE carries GRE through a relay that disguises the wire traffic (see the README). GRE is
+unencrypted; WireGuard is the encrypted alternative:
 
 - encrypted
 - UDP-based
-- simpler packet path than GRE-over-FOU
-- usually better throughput on censorship-heavy or DPI-heavy links
+- simple packet path
 
-## Suggested starting point
+## WireGuard through the relay
+
+On a path that cuts every ordinary UDP flow after a few packets (see [FILTER.md](FILTER.md)), plain
+WireGuard fails: the handshake passes, then every data packet is dropped. Run it through the same relay
+instead. Measured on such a path, WireGuard + relay (DNS disguise) reached 129 Mbit/s down, 108 up, and
+141 with four flows, against 138 / 153 / 161 for GRE.
+
+On each server, run the relay with WireGuard's own listen address as the reply address, and point the
+peer's endpoint at the relay:
+
+```sh
+golden-gre-relay --facade dns --bind <this public IPv4> --peer <peer public IPv4> \
+  --local 127.0.0.1:5601 --reply 127.0.0.1:51820 --port 53
+```
+
+```ini
+[Interface]
+ListenPort = 51820
+MTU = 1380
+# ...
+
+[Peer]
+Endpoint = 127.0.0.1:5601
+PersistentKeepalive = 25
+# ...
+```
+
+The relay binds UDP/53 on the public address, so it cannot share an address with a running
+`golden-gre@` tunnel that uses the same port: use another local address, or stop that tunnel.
+
+## Direct WireGuard: suggested starting point
 
 - MTU: `1320`
 - Port: `443` if it works, otherwise any open UDP port
