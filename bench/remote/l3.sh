@@ -14,6 +14,7 @@ if [ "$role" = ir ]; then L=$IR R=$TR H=1 SP=5581; else L=$TR R=$IR H=2 SP=auto;
 FP=5581   # FOU port of the native fou/gue methods
 RP=5701   # relay's local UDP port (a running golden-gre tunnel uses 5601/5599 by default: keep the benchmark apart)
 LP=5698   # loopback FOU port of the gre-*-c methods
+BK=91     # their GRE key: a running golden-gre tunnel has the same loopback endpoints and key 41 by default
 TB=/tmp/tb
 
 facade="" impl=py
@@ -56,7 +57,7 @@ up)
     geneve) ip link add tb0 type geneve id 41 remote $R dstport 6081 ;;
     gre-dns-c | gre-icmp-c)
       ip fou add port $LP ipproto 47 local 127.0.0.1
-      ip link add tb0 type gre local 127.0.0.1 remote 127.0.0.1 key 41 ttl 255 encap fou encap-sport $LP encap-dport $RP ;;
+      ip link add tb0 type gre local 127.0.0.1 remote 127.0.0.1 key $BK ttl 255 encap fou encap-sport $LP encap-dport $RP ;;
     wg | wg-dns | wg-icmp | wg-dns-c | wg-icmp-c)
       ip link add tb0 type wireguard || { echo "wireguard unavailable"; exit 1; }
       k=$(wg genkey)
@@ -65,6 +66,7 @@ up)
       echo "PUB=$(wg show tb0 public-key)" ;;
     *) echo "unknown method $method"; exit 1 ;;
   esac
+  ip link show tb0 >/dev/null 2>&1 || { echo "tb0 was not created"; ip fou del port $LP local 127.0.0.1 2>/dev/null; ip fou del port $FP 2>/dev/null; exit 1; }
   ip addr add 10.77.61.$H/30 dev tb0
   # One packet per rewrite: a GSO segment would be rewritten once and split into many packets that
   # share a source port, which the path cuts after about 6.

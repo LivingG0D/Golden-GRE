@@ -114,7 +114,7 @@ tun_up() {
 
 # tun_down <method> -- remove everything tun_up created (safe to call twice)
 tun_down() {
-  rssh "$TR" "kill \$(cat $TB/ip3.pid) 2>/dev/null; bash $TB/hop.sh down; bash $TB/l3.sh down $1 tr" 2>&1 | sed 's/^/TR /'
+  rssh "$TR" "kill \$(cat $TB/ip3.pid) 2>/dev/null; bash $TB/hop.sh down; IR=$IR TR=$TR bash $TB/l3.sh down $1 tr" 2>&1 | sed 's/^/TR /'
   sleep 2
-  rssh "$IR" "bash $TB/hop.sh down; bash $TB/l3.sh down $1 ir" 2>&1 | sed 's/^/IR /'
+  rssh "$IR" "bash $TB/hop.sh down; IR=$IR TR=$TR bash $TB/l3.sh down $1 ir" 2>&1 | sed 's/^/IR /'
 }

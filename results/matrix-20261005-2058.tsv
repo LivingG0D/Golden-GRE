@@ -1,0 +1,2 @@
+method	ping	tcp_down	tcp_up	tcp_down_4flows	udp_30M_down	cpu_ir_tcp_down	cpu_tr
+gre-icmp-c	rx 19/20 ok, loss 5%	66.2 Mbits/sec retr=26866	117 Mbits/sec retr=24937	87.7 Mbits/sec retr=16393	29.9 Mbits/sec jitter ms 4/13950 loss (0.029%)	busy=8% steal=0%	busy=21% steal=30%
