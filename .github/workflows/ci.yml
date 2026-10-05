@@ -30,6 +30,11 @@ jobs:
           for k in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR FOU_PORT; do
             grep -q "$k" examples/point-to-point.conf.example || { echo "example missing $k"; exit 1; }
           done
+          # IPv6 underlay is plain GRE: the four keys, and no FOU_PORT to set
+          for k in DEV LOCAL_PUB REMOTE_PUB TUN_ADDR; do
+            grep -q "^$k=" examples/point-to-point-ipv6.conf.example || { echo "IPv6 example missing $k"; exit 1; }
+          done
+          ! grep -q '^FOU_PORT=' examples/point-to-point-ipv6.conf.example || { echo "IPv6 example must not set FOU_PORT"; exit 1; }
           echo "examples ok"
 
   e2e:

@@ -3,7 +3,8 @@
 # servers. Brings a real tunnel up with scripts/golden-gre-up.sh, pings across it,
 # checks the firewall state and the health check, then tears it down and checks
 # nothing is left behind. Needs root plus iproute2, iptables, ethtool, ping, python3. Every namespace and config
-# name carries this run's PID, so it never touches pre-existing state.
+# name carries this run's PID, so it never touches pre-existing state. The last part
+# repeats the exercise with an IPv6 underlay (plain GRE, no FOU).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,9 +17,12 @@ ok(){ echo "ok: $*"; }
 
 A="gg-a-$$" B="gg-b-$$" C="gg-c-$$"
 CA="e2e-a-$$" CB="e2e-b-$$" CC="e2e-c-$$"
+# IPv6-underlay configs (second tunnel to the same peer, mixed families, no route)
+CA6="e2e-a6-$$" CB6="e2e-b6-$$" CD6="e2e-d6-$$" CE6="e2e-e6-$$" CC6="e2e-c6-$$"
 cleanup() {
   for ns in "$A" "$B" "$C"; do ip netns del "$ns" 2>/dev/null || true; done
   rm -f "/etc/golden-gre/$CA.conf" "/etc/golden-gre/$CB.conf" "/etc/golden-gre/$CC.conf"
+  for c in "$CA6" "$CB6" "$CD6" "$CE6" "$CC6"; do rm -f "/etc/golden-gre/$c.conf"; done
 }
 trap cleanup EXIT
 
@@ -170,5 +174,109 @@ EOF
 ip netns exec "$C" "$UP" "$CC" 2>/dev/null && fail "up succeeded with no route to the peer"
 ip -n "$C" link show gre1 >/dev/null 2>&1 && fail "failed up left gre1 behind"
 ok "no route to the peer: up fails before creating anything"
+
+# --- IPv6 underlay: plain GRE over IPv6 (ip6gre), no FOU --------------------------
+# Same two servers, now also reachable over IPv6. The overlay stays IPv4.
+ip -n "$A" addr add 2001:db8:6::1/64 dev veth-a nodad
+ip -n "$B" addr add 2001:db8:6::2/64 dev veth-b nodad
+
+cat >"/etc/golden-gre/$CA6.conf" <<'EOF'
+DEV=gre6
+LOCAL_PUB=2001:db8:6::1
+REMOTE_PUB=2001:db8:6::2
+TUN_ADDR=10.99.96.1/30
+GRE_KEY=7
+EOF
+cat >"/etc/golden-gre/$CB6.conf" <<'EOF'
+DEV=gre6
+LOCAL_PUB=2001:db8:6::2
+REMOTE_PUB=2001:db8:6::1
+TUN_ADDR=10.99.96.2/30
+GRE_KEY=7
+EOF
+
+ip netns exec "$A" "$UP" "$CA6"
+ip netns exec "$B" "$UP" "$CB6"
+ip netns exec "$A" "$UP" "$CA6" >/dev/null   # second run must be harmless
+ip netns exec "$A" ping -c 3 -W 2 -q 10.99.96.2 >/dev/null || fail "no ping across the IPv6-underlay tunnel"
+ok "ping across a tunnel whose underlay is IPv6"
+
+ip -n "$A" -d link show gre6 | grep -q 'ip6gre' || fail "IPv6 underlay did not create an ip6gre device"
+ip -n "$A" -d link show gre6 | grep -q 'ikey 0.0.0.7 okey 0.0.0.7' || fail "GRE_KEY not applied over IPv6"
+ok "ip6gre device with GRE_KEY"
+
+ip netns exec "$A" scripts/preflight.sh "$CA6" >/dev/null || fail "preflight rejected a valid IPv6 config (it needs no FOU_PORT)"
+ok "preflight accepts an IPv6 config without FOU_PORT"
+
+ip netns exec "$A" ip fou show | grep -q 'port' && fail "IPv6 underlay opened a FOU listener"
+ip netns exec "$A" iptables-save | grep -q 'dport' && fail "IPv6 underlay added a UDP INPUT rule"
+ok "no FOU listener and no UDP rules for an IPv6 underlay"
+
+# Plain GRE has no port to pin, so the INPUT rule is per protocol and peer. It carries
+# the instance name, so tunnels sharing a peer each own (and later remove) their rule.
+in6() { printf -- '-A INPUT -s 2001:db8:6::2/128 -p (gre|47) -m comment --comment "golden-gre:%s" -j ACCEPT$' "$1"; }
+rules6="$(ip netns exec "$A" ip6tables-save)"
+[ "$(grep -cE -- "$(in6 "$CA6")" <<<"$rules6")" = 1 ] || fail "IPv6 INPUT accept is not present exactly once"
+rules4="$(ip netns exec "$A" iptables-save)"
+for want in '-A FORWARD -i gre6 -j ACCEPT' '-A FORWARD -o gre6 -j ACCEPT'; do
+  [ "$(grep -cxF -- "$want" <<<"$rules4")" = 1 ] || fail "missing or duplicated rule: $want"
+done
+ok "INPUT accept and FORWARD accepts present exactly once"
+
+cat >"/etc/golden-gre/$CD6.conf" <<'EOF'
+DEV=gre7
+LOCAL_PUB=2001:db8:6::1
+REMOTE_PUB=2001:db8:6::2
+TUN_ADDR=10.99.95.1/30
+GRE_KEY=8
+EOF
+ip netns exec "$A" "$UP" "$CD6" >/dev/null
+ip netns exec "$A" "$DOWN" "$CD6" >/dev/null
+rules6="$(ip netns exec "$A" ip6tables-save)"
+[ "$(grep -cE -- "$(in6 "$CA6")" <<<"$rules6")" = 1 ] || fail "downing a second tunnel to the same peer removed this tunnel's INPUT rule"
+grep -q "golden-gre:$CD6" <<<"$rules6" && fail "down left the second tunnel's INPUT rule"
+ok "tunnels to the same peer keep their own INPUT rules"
+
+ip netns exec "$A" "$CHECK" "$CA6" >/dev/null || fail "check failed on a healthy IPv6-underlay tunnel"
+sed -i 's/^GRE_KEY=7$/GRE_KEY=9/' "/etc/golden-gre/$CB6.conf"
+ip netns exec "$B" "$UP" "$CB6" >/dev/null
+ip netns exec "$A" "$CHECK" "$CA6" >/dev/null 2>&1 && fail "check passed although the GRE keys differ over IPv6"
+ok "mismatched GRE_KEY blocks traffic over IPv6 too"
+
+cat >"/etc/golden-gre/$CE6.conf" <<'EOF'
+DEV=gre8
+LOCAL_PUB=192.0.2.1
+REMOTE_PUB=2001:db8:6::2
+TUN_ADDR=10.99.94.1/30
+FOU_PORT=5557
+EOF
+out="$(ip netns exec "$A" "$UP" "$CE6" 2>&1)" && fail "up accepted mixed IPv4/IPv6 endpoints"
+grep -qi 'same address family' <<<"$out" || fail "mixed address families are not explained: $out"
+ip -n "$A" link show gre8 >/dev/null 2>&1 && fail "mixed-family up left a device behind"
+ok "mixed address families are rejected before anything is created"
+
+ip netns exec "$A" "$DOWN" "$CA6"
+ip netns exec "$A" "$DOWN" "$CA6" >/dev/null   # second run must be harmless
+ip -n "$A" link show gre6 >/dev/null 2>&1 && fail "gre6 still exists after down"
+ip netns exec "$A" ip6tables-save | grep -q 'golden-gre:' && fail "IPv6 INPUT rule left behind"
+ip netns exec "$A" iptables-save | grep -q 'gre6' && fail "iptables rules left behind"
+ok "down removed the IPv6 tunnel and its rules"
+
+echo 'MTU=bogus' >>"/etc/golden-gre/$CA6.conf"
+ip netns exec "$A" "$UP" "$CA6" >/dev/null 2>&1 && fail "up succeeded with an invalid MTU over IPv6"
+ip -n "$A" link show gre6 >/dev/null 2>&1 && fail "failed IPv6 up left gre6 behind"
+ip netns exec "$A" ip6tables-save | grep -q 'golden-gre:' && fail "failed IPv6 up left its INPUT rule behind"
+ip netns exec "$A" iptables-save | grep -q 'gre6' && fail "failed IPv6 up left iptables rules behind"
+ok "failed IPv6 bringup rolls back device and rules"
+
+cat >"/etc/golden-gre/$CC6.conf" <<'EOF'
+DEV=gre6
+LOCAL_PUB=2001:db8:6::9
+REMOTE_PUB=2001:db8:ffff::9
+TUN_ADDR=10.99.93.1/30
+EOF
+ip netns exec "$C" "$UP" "$CC6" 2>/dev/null && fail "IPv6 up succeeded with no route to the peer"
+ip -n "$C" link show gre6 >/dev/null 2>&1 && fail "failed IPv6 up left gre6 behind"
+ok "IPv6: no route to the peer fails before creating anything"
 
 echo "e2e: PASS"

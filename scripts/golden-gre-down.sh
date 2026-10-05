@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Golden GRE — tear down one GRE-over-FOU tunnel.
+# Golden GRE — tear down one GRE tunnel (GRE-over-FOU on IPv4, plain GRE on IPv6).
 # Usage: golden-gre-down.sh <instance>
 set -uo pipefail
 
@@ -21,15 +21,22 @@ if [ -n "${DEV:-}" ]; then
   ip link del "${DEV}" 2>/dev/null || true
 fi
 
-# Remove this tunnel's FOU listener (each tunnel uses a unique port) and its
-# INPUT rules
-if [ -n "${FOU_PORT:-}" ]; then
-  ip fou del port "${FOU_PORT}" 2>/dev/null || true
-  if [ -n "${REMOTE_PUB:-}" ]; then
-    iptables -D INPUT -p udp --dport "${FOU_PORT}" -s "${REMOTE_PUB}" -j ACCEPT 2>/dev/null || true
-    iptables -D INPUT -p udp --dport "${FOU_PORT}" ! -s "${REMOTE_PUB}" -j DROP 2>/dev/null || true
-  fi
-fi
+# Remove this tunnel's INPUT rules. IPv4 (FOU): also its listener (each tunnel uses a
+# unique port). IPv6 (plain GRE): the one protocol-47 accept that carries its name.
+case "${REMOTE_PUB:-}" in
+  *:*)
+    ip6tables -D INPUT -p 47 -s "${REMOTE_PUB}" -m comment --comment "golden-gre:${NAME}" -j ACCEPT 2>/dev/null || true
+    ;;
+  *)
+    if [ -n "${FOU_PORT:-}" ]; then
+      ip fou del port "${FOU_PORT}" 2>/dev/null || true
+      if [ -n "${REMOTE_PUB:-}" ]; then
+        iptables -D INPUT -p udp --dport "${FOU_PORT}" -s "${REMOTE_PUB}" -j ACCEPT 2>/dev/null || true
+        iptables -D INPUT -p udp --dport "${FOU_PORT}" ! -s "${REMOTE_PUB}" -j DROP 2>/dev/null || true
+      fi
+    fi
+    ;;
+esac
 
 echo "golden-gre: ${NAME} down"
 exit 0

@@ -34,6 +34,7 @@ On top of transport it ships the **production glue** a raw `ip tunnel` command l
 - 🔀 **Many flows, not one** — the FOU source port follows each inner flow's hash, so the tunnel isn't a single UDP 5-tuple stuck in one per-flow policer bucket, ECMP path, or receive queue.
 - 🔁 **Reboot-persistent** — one **systemd template unit** (`golden-gre@<name>`) brings every tunnel back on boot.
 - 🌐 **Hub & spoke** — run many tunnels on one box; each is an isolated instance (own device, UDP port, /30, config).
+- 🌍 **IPv6 underlay** — when the IPv4 path to a peer is filtered or throttled, the same tunnel runs over IPv6 (plain GRE). See [IPv6 underlay](#-ipv6-underlay).
 - 🧩 **Config-driven** — one small file per tunnel in `/etc/golden-gre/`. No IPs baked into scripts.
 
 ---
@@ -76,11 +77,12 @@ Because the wire payload is UDP, proto-47 filtering never sees a GRE packet to d
 - Root on both ends.
 - **UDP reachability** between the two public IPs on your chosen port(s). (That's the whole point — UDP gets through where GRE doesn't.)
 - A free **/30** per tunnel for the overlay, and a unique **UDP port** + **device name** per tunnel on any shared host.
+- *Optional, for an [IPv6 underlay](#-ipv6-underlay):* the `ip6_gre` module, `ip6tables`, and IPv6 reachability for IP protocol 47 between the two addresses (no UDP port needed).
 
 Check modules:
 
 ```bash
-modprobe fou && modprobe ip_gre && echo "ready"
+modprobe fou && modprobe ip_gre && echo "ready"   # add: modprobe ip6_gre  (IPv6 underlay)
 ```
 
 ---
@@ -159,11 +161,11 @@ One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd inst
 | Key | Required | Example | Meaning |
 |-----|:--------:|---------|---------|
 | `DEV` | ✅ | `gre1` | Tunnel device name. **Unique per host.** |
-| `LOCAL_PUB` | ✅ | `203.0.113.10` | This server's public IP (GRE/FOU underlay source). |
-| `REMOTE_PUB` | ✅ | `198.51.100.20` | Peer's public IP. |
-| `TUN_ADDR` | ✅ | `10.99.99.1/30` | This end's overlay address. Peer takes the other host in the /30. |
-| `FOU_PORT` | ✅ | `5555` | UDP port for GRE-in-UDP. **Unique per tunnel** on a shared host. Both ends use the same port. |
-| `MTU` | ⬜ | `1400` | Tunnel MTU. Default `1400` (safe under a 1500 underlay: 20 IP + 8 UDP + 4 GRE overhead, +4 with `GRE_KEY`). |
+| `LOCAL_PUB` | ✅ | `203.0.113.10` | This server's public IP (GRE/FOU underlay source). An IPv6 address selects an [IPv6 underlay](#-ipv6-underlay). |
+| `REMOTE_PUB` | ✅ | `198.51.100.20` | Peer's public IP. Same family as `LOCAL_PUB`. |
+| `TUN_ADDR` | ✅ | `10.99.99.1/30` | This end's overlay address (always IPv4). Peer takes the other host in the /30. |
+| `FOU_PORT` | ✅ (IPv4) | `5555` | UDP port for GRE-in-UDP. **Unique per tunnel** on a shared host. Both ends use the same port. Not used on an IPv6 underlay. |
+| `MTU` | ⬜ | `1400` | Tunnel MTU. Default `1400` (safe under a 1500 underlay: 20 IP + 8 UDP + 4 GRE overhead, +4 with `GRE_KEY`; on IPv6: 40 + 4, +4 with `GRE_KEY`). |
 | `ROUTES` | ⬜ | `"192.0.2.0/24 198.18.0.0/24"` | Space-separated CIDRs to route via this tunnel. |
 | `NAT_SRC` | ⬜ | `10.99.99.0/30` | If set, MASQUERADE this source out `NAT_OUT` (use this node as an internet exit). |
 | `NAT_OUT` | ⬜ | `eth0` | Egress interface for `NAT_SRC`. Unset: any interface except the tunnel itself (no guessing at `eth0` vs `ens3`). |
@@ -171,6 +173,37 @@ One file per tunnel: `/etc/golden-gre/<name>.conf`. `<name>` is the systemd inst
 | `PEER_ADDR` | ⬜ | `10.99.99.2` | Peer's overlay address for `golden-gre-check`. Unset: derived as the other host of a /30 or /31 `TUN_ADDR`. |
 
 > 📝 IPs above use the RFC 5737 documentation ranges. Replace with your real values **in `/etc/golden-gre/` on each host** — never commit them.
+
+---
+
+## 🌍 IPv6 underlay
+
+When the IPv4 path to a peer is filtered or throttled (GRE-in-UDP, QUIC, even bulk TCP can stall after the first few KB while `ping` still works) but IPv6 is open, give both ends IPv6 addresses and the same tunnel runs over IPv6. Start from [`examples/point-to-point-ipv6.conf.example`](examples/point-to-point-ipv6.conf.example):
+
+```bash
+DEV=gre1
+LOCAL_PUB=2001:db8:a::10     # this server's public IPv6 address
+REMOTE_PUB=2001:db8:b::20    # the peer's
+TUN_ADDR=10.99.99.1/30       # the overlay stays IPv4
+```
+
+What changes:
+
+- **Plain GRE, no UDP wrapper.** The device is `ip6gre`: GRE (IP protocol 47) carried directly in IPv6. There is no `FOU_PORT` and no GRO workaround — and, unlike IPv4, nothing hides the tunnel from a path that drops protocol 47. FOU over IPv6 is not supported.
+- **Per tunnel.** The family follows the endpoints and `LOCAL_PUB` / `REMOTE_PUB` must match, so IPv4 and IPv6 tunnels can share a host. The overlay (`TUN_ADDR`, `ROUTES`, `NAT_SRC`) stays IPv4.
+- **Firewall.** `up` adds one `ip6tables` INPUT accept for protocol 47 from the peer, tagged `golden-gre:<name>`, so tunnels that share a peer never remove each other's rule. There is no matching DROP: it would cut your other tunnels, and the kernel already ignores GRE that doesn't match the tunnel's endpoints and key.
+- **MTU.** Overhead is 44 bytes (40 IPv6 + 4 GRE, 48 with `GRE_KEY`), so a 1500-byte underlay fits up to 1452. The default `1400` still applies.
+
+> ⚠️ **Some IPv6 paths drop particular GRE keys.** In one deployment, several tunnels between the same two addresses differed only in `GRE_KEY`: keys 3, 11, 12 and 14 lost 100% of packets while 1, 2, 13 and 15–18 passed, so the transit hashes on the key. If `ping` over a new tunnel gets nothing while another key works, change `GRE_KEY` on both ends. To find a key that passes, bring up one throwaway tunnel per candidate on both ends and ping across each (swap local/remote and the last octet on the peer):
+>
+> ```bash
+> for k in 11 12 13 14; do
+>   ip link add t$k type ip6gre local "$LOCAL" remote "$REMOTE" key $k &&
+>   ip addr add 10.88.$k.1/30 dev t$k && ip link set t$k up
+> done
+> for k in 11 12 13 14; do ping -c3 -W1 -q 10.88.$k.2 >/dev/null && echo "key $k passes"; done
+> for k in 11 12 13 14; do ip link del t$k; done   # clean up on both ends
+> ```
 
 ---
 
@@ -327,6 +360,9 @@ Healthy signs: ping at the raw path RTT with ~0% loss, TCP that climbs and holds
 | **UDP fast, TCP stuck ~1 Mbit/s** | NIC **GRO** corrupting GRE-in-UDP | `ethtool -K <underlay-iface> gro off` on both ends (automatic in `golden-gre-up.sh`). Watch `UdpInErrors` on the receiver with `nstat`. Full writeup: **[docs/GRO.md](docs/GRO.md)**. |
 | Gone after reboot | Unit not enabled | `systemctl is-enabled golden-gre@<name>`. |
 | `RTNETLINK: File exists` | Stale device/addr | `systemctl restart golden-gre@<name>` (down/up is idempotent). |
+| `ping` passes but bulk traffic stalls after the first KB, on IPv4 | The IPv4 path to the peer is filtered or throttled, whatever the encapsulation | If both hosts have IPv6, move the tunnel to an [IPv6 underlay](#-ipv6-underlay). Test the paths first: `iperf3 -c <peer> -P 4` over IPv4 and `iperf3 -6 -c <peer6> -P 4`. |
+| IPv6 underlay: ping works with one `GRE_KEY`, 100% loss with another | The transit hashes on the GRE key | Change `GRE_KEY` on both ends; see [IPv6 underlay](#-ipv6-underlay). |
+| `LOCAL_PUB and REMOTE_PUB must be the same address family` | One address is IPv4, the other IPv6 | Use two IPv4 or two IPv6 addresses. |
 
 Logs: `journalctl -u golden-gre@<name>`.
 
@@ -376,8 +412,8 @@ Pure bash, no build step, no runtime dependencies beyond what's in [Requirements
 
 | Job | What it enforces |
 |-----|------------------|
-| **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point example still defines all five required keys. |
-| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). It also checks `GRE_KEY` is applied and that a mismatched key blocks traffic, that UDP to the FOU port from a non-peer address is dropped, and that `golden-gre-check` passes from both ends of a healthy tunnel and fails on a broken one. Namespace and config names carry the run's PID, so it never touches existing state. |
+| **Lint & sanity** | Every script lints clean under ShellCheck, with no codes disabled (the sourced per-tunnel `/etc` config is marked `# shellcheck source=/dev/null`); every script starts with `#!/usr/bin/env bash` and is committed executable; and the point-to-point examples still define their required keys (five for IPv4, four and no `FOU_PORT` for IPv6). |
+| **End-to-end** | Runs `install.sh`, then [`tests/e2e.sh`](tests/e2e.sh): two network namespaces on a veth pair act as two servers, bring a real tunnel up, ping across it, check `encap-sport auto`, the routes, and that the FORWARD/MSS/NAT rules exist exactly once after a re-run, then tear down and check nothing is left. It also checks a re-run moves the FORWARD accepts back above a freshly inserted DROP, and that `up` with no route to the peer fails before creating anything (systemd then retries). It also checks `GRE_KEY` is applied and that a mismatched key blocks traffic, that UDP to the FOU port from a non-peer address is dropped, and that `golden-gre-check` passes from both ends of a healthy tunnel and fails on a broken one. It then repeats the exercise on an IPv6 underlay: ping across plain GRE, `GRE_KEY` applied, no FOU listener or UDP rules, the `ip6tables` accept present exactly once and kept per instance when two tunnels share a peer, a mismatched key blocking traffic, mixed address families rejected, rollback on failure, and no route to the peer failing before anything is created. Namespace and config names carry the run's PID, so it never touches existing state. |
 | **systemd wiring** | [`tests/systemd.sh`](tests/systemd.sh) on the runner's real systemd: an enabled `golden-gre-check@` timer starts with its tunnel and stops with it, and a failing check leaves the unit `failed`. |
 
 Reproduce both locally before pushing (the e2e test needs root, `iptables`, and `ethtool`; WSL2 works):
@@ -398,6 +434,7 @@ sudo tests/e2e.sh
 - **Golden GRE is unencrypted** — like GRE itself. The overlay protects nothing on the wire. If you need confidentiality, run it **inside** WireGuard/IPsec, or treat the tunnel purely as transport for already-encrypted traffic.
 - **Never commit real configs.** Your per-host IPs live in `/etc/golden-gre/` and are intentionally outside this repo. `.gitignore` guards against accidental secret/`.env` commits.
 - **The FOU port only takes packets from the peer.** `up` inserts two INPUT rules at the top: ACCEPT UDP to `FOU_PORT` from `REMOTE_PUB` (so it works on hosts whose INPUT policy is DROP, like ufw), and DROP it from everyone else. They match the **destination** port only — the source port varies per flow. `down` removes them.
+- **An IPv6 underlay has no port to pin.** `up` inserts one `ip6tables` INPUT accept for protocol 47 from `REMOTE_PUB` and no DROP (see [IPv6 underlay](#-ipv6-underlay)): the kernel already ignores GRE that doesn't match the tunnel's endpoints and key. `down` removes the accept.
 - **That does not stop spoofing.** A blind attacker who forges `REMOTE_PUB` as the source can still inject GRE packets, and their inner packets reach whatever the tunnel routes to. Set the same `GRE_KEY` on both ends to reject them: without the key the kernel drops the packet. The key travels in cleartext, so it stops blind injection, not an attacker who can see your traffic.
 - The tunnel device is trusted for forwarding: `up` accepts everything routed in or out of `greN`. Filter inside the overlay if the peer shouldn't reach everything this host can.
 
@@ -421,7 +458,7 @@ sudo tests/e2e.sh
                          ▼  looks like plain UDP — proto-47 filters see nothing to drop
 ```
 
-The receiving FOU socket strips the UDP, reinjects the GRE, and the matching `greN` device delivers your inner packet. Overhead is **32 bytes** (20 outer IP + 8 UDP + 4 GRE), so a 1500-byte underlay fits an MTU up to 1468; the default `MTU=1400` leaves headroom for PPPoE, VLANs, and other stacked headers.
+The receiving FOU socket strips the UDP, reinjects the GRE, and the matching `greN` device delivers your inner packet. Overhead is **32 bytes** (20 outer IP + 8 UDP + 4 GRE), so a 1500-byte underlay fits an MTU up to 1468; the default `MTU=1400` leaves headroom for PPPoE, VLANs, and other stacked headers. On an [IPv6 underlay](#-ipv6-underlay) there is no FOU hop: the GRE packet rides directly in the IPv6 packet, 44 bytes of overhead (40 + 4 GRE, 48 with `GRE_KEY`).
 
 ---
 

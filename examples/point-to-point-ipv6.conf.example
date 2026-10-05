@@ -1,0 +1,23 @@
+# Golden GRE — point-to-point tunnel over an IPv6 underlay.
+# Copy to /etc/golden-gre/<name>.conf on the server and edit. Start with:
+#   systemctl enable --now golden-gre@<name>
+#
+# Use this when the IPv4 path to the peer is filtered or throttled but IPv6 is open.
+# The tunnel is plain GRE (IP protocol 47) carried in IPv6: no UDP wrapper, so no
+# FOU_PORT. The overlay (TUN_ADDR) stays IPv4. See README: "IPv6 underlay".
+#
+# Addresses below are RFC 3849 documentation placeholders. Replace with real values.
+
+DEV=gre1                    # tunnel device name (unique per host)
+LOCAL_PUB=2001:db8:a::10    # THIS server's public IPv6 address
+REMOTE_PUB=2001:db8:b::20   # peer's public IPv6 address (same family as LOCAL_PUB)
+TUN_ADDR=10.99.99.1/30      # this end's overlay IP (peer = 10.99.99.2/30)
+MTU=1400                    # tunnel MTU (default 1400; at most 1452 fits a 1500 underlay)
+
+# --- optional (same meaning as in point-to-point.conf.example) ---
+# GRE_KEY=314159                   # same value on both ends. Some paths drop particular
+#                                  # keys: if ping fails, try another (README: IPv6 underlay)
+# ROUTES="10.50.0.0/24"
+# NAT_SRC="10.99.99.0/30"
+# NAT_OUT=eth0
+# PEER_ADDR=10.99.99.2
