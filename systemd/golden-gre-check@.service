@@ -1,9 +1,15 @@
 [Unit]
 Description=Golden GRE liveness check (%i)
 Documentation=https://github.com/LivingG0D/Golden-GRE
+# Stopping the tunnel also stops a check that is still running. After= orders
+# that stop before the tunnel's teardown, so the ping never outlives the device.
+PartOf=golden-gre@%i.service
 After=golden-gre@%i.service
 ConditionPathExists=/etc/golden-gre/%i.conf
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/golden-gre-check %i
+# For Type=oneshot, systemd counts death by SIGTERM as a failure. Being stopped
+# along with the tunnel is not one.
+SuccessExitStatus=SIGTERM

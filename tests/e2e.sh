@@ -91,6 +91,14 @@ done
 ip netns exec "$A" iptables -D FORWARD -j DROP
 ok "re-run moves FORWARD accepts back above a DROP"
 
+# --- a failing re-run on a live tunnel must not tear it down -------------------
+# systemd still shows such a tunnel active, so nothing would bring it back.
+echo 'ROUTES="10.50.0.0/33"' >>"/etc/golden-gre/$CA.conf"
+ip netns exec "$A" "$UP" "$CA" >/dev/null 2>&1 && fail "up succeeded with an invalid ROUTES entry"
+sed -i '$d' "/etc/golden-gre/$CA.conf"
+ip netns exec "$A" ping -c 3 -W 2 -q 10.99.99.2 >/dev/null || fail "a failed re-run tore down a live tunnel"
+ok "a failing re-run leaves a live tunnel up"
+
 # --- FOU port only takes packets from the peer --------------------------------
 ip -n "$B" addr add 192.0.2.3/24 dev veth-b
 ip netns exec "$B" python3 -c 'import socket
@@ -119,6 +127,35 @@ ip -n "$A" link show gre1 >/dev/null 2>&1 && fail "gre1 still exists after down"
 ip netns exec "$A" ip fou show | grep -q 'port 5555' && fail "FOU listener left behind"
 ip netns exec "$A" iptables-save | grep -qE 'gre1|dport 5555' && fail "iptables rules left behind"
 ok "down removed device, FOU listener and rules"
+
+# --- a bringup that fails partway must roll back everything it created --------
+# MTU is applied after the FOU listener, INPUT rules, device and address exist.
+echo 'MTU=bogus' >>"/etc/golden-gre/$CA.conf"
+ip netns exec "$A" "$UP" "$CA" >/dev/null 2>&1 && fail "up succeeded with an invalid MTU"
+ip -n "$A" link show gre1 >/dev/null 2>&1 && fail "failed up left gre1 behind"
+ip netns exec "$A" ip fou show | grep -q 'port 5555' && fail "failed up left the FOU listener behind"
+ip netns exec "$A" iptables-save | grep -qE 'gre1|dport 5555' && fail "failed up left iptables rules behind"
+ok "failed bringup rolls back device, FOU listener and rules"
+
+# --- a bringup stopped mid-run (systemctl stop during start) must roll back too -
+# An ethtool shim holds up at the GRO step, after listener, rules and device
+# exist. SIGTERM goes to the whole process group, as systemd sends it to the cgroup.
+sed -i '/^MTU=bogus$/d' "/etc/golden-gre/$CA.conf"
+shim="$(mktemp -d)"
+printf '#!/bin/sh\nexec sleep 30\n' >"$shim/ethtool"
+chmod +x "$shim/ethtool"
+ip netns exec "$A" env PATH="$shim:$PATH" setsid "$UP" "$CA" >/dev/null 2>&1 &
+pid=$!
+for _ in $(seq 50); do ip -n "$A" link show gre1 >/dev/null 2>&1 && break; sleep 0.1; done
+ip -n "$A" link show gre1 >/dev/null 2>&1 || fail "up never reached the device step"
+kill -TERM -- "-$pid"
+rc=0; wait "$pid" || rc=$?
+rm -rf "$shim"
+[ "$rc" -ne 0 ] || fail "up exited 0 after SIGTERM"
+ip -n "$A" link show gre1 >/dev/null 2>&1 && fail "stopped up left gre1 behind"
+ip netns exec "$A" ip fou show | grep -q 'port 5555' && fail "stopped up left the FOU listener behind"
+ip netns exec "$A" iptables-save | grep -qE 'gre1|dport 5555' && fail "stopped up left iptables rules behind"
+ok "bringup stopped by SIGTERM rolls back"
 
 # --- boot race: no route to the peer yet must fail cleanly (systemd retries) --
 ip netns add "$C"

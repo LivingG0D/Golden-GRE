@@ -22,6 +22,23 @@ MTU="${MTU:-1400}"
 UL="$(ip route get "${REMOTE_PUB}" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p')" || true
 [ -n "${UL}" ] || { echo "golden-gre: no route to ${REMOTE_PUB} yet" >&2; exit 1; }
 
+# On a fresh bringup, roll back on any failure: systemd never runs ExecStop for a
+# start that failed, so a half-built tunnel (listener, rules, device) would stay
+# behind. Only when the device does not exist yet: a failing re-run by hand on a
+# live tunnel must not tear it down while systemd still reports it active.
+rollback() {
+  local rc=$?
+  [ "$rc" -eq 0 ] && return
+  echo "golden-gre: ${NAME} bringup failed (exit ${rc}), rolling back" >&2
+  "$(dirname "$0")/golden-gre-down.sh" "${NAME}" >/dev/null 2>&1
+}
+if ! ip link show "${DEV}" >/dev/null 2>&1; then
+  trap rollback EXIT
+  # A stop during bringup (SIGTERM from systemd) must roll back too, but the EXIT
+  # trap would see $? of the last finished command, usually 0. Exit non-zero.
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+fi
+
 # fou has no module alias, so `ip fou add` cannot autoload it. ip_gre does
 # autoload (rtnl-link-gre) at `ip link add type gre`.
 modprobe fou
